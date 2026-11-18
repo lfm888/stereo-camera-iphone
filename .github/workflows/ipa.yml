@@ -1,0 +1,79 @@
+name: Build unsigned IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      with_yolo:
+        description: "Also export + embed the YOLO11n-seg CoreML model (slow, ~10 min)"
+        type: boolean
+        default: false
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/ipa.yml"
+      - "StereoVision/**"
+      - "Config/**"
+      - "project.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # macos-15 ships Xcode 16.x with the Metal compiler bundled (no MetalToolchain download needed)
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          xcrun --find metal
+          xcodebuild -project StereoVision.xcodeproj -list || true
+
+      # Optional: convert YOLO11n-seg to CoreML so object detection uses the 80-class model
+      - name: Export YOLO model (optional)
+        if: ${{ inputs.with_yolo }}
+        run: |
+          brew install uv || curl -LsSf https://astral.sh/uv/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          chmod +x scripts/export_yolo.sh
+          scripts/export_yolo.sh
+          ls -la StereoVision/Models || true
+
+      - name: Build (no code signing)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project StereoVision.xcodeproj \
+            -target StereoVision \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            ONLY_ACTIVE_ARCH=NO \
+            build 2>&1 | tail -40
+
+      - name: Package unsigned IPA
+        run: |
+          APP="build/Build/Products/Release-iphoneos/StereoVision.app"
+          test -d "$APP" || (echo "app not found" && exit 1)
+          echo "--- bundle info ---"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP/Info.plist"
+          rm -rf Payload && mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry StereoVision-unsigned.ipa Payload
+          ls -lh StereoVision-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StereoVision-unsigned-ipa
+          path: StereoVision-unsigned.ipa
+          if-no-files-found: error
