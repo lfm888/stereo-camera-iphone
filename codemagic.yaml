@@ -1,0 +1,37 @@
+# Codemagic (https://codemagic.io) build config — free tier: 500 min/month on macOS M2 VMs
+# Produces an UNSIGNED ipa, install it with Sideloadly on Windows using your own Apple ID.
+workflows:
+  ios-unsigned:
+    name: StereoVision unsigned IPA
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Show toolchain
+        script: |
+          xcodebuild -version
+          sw_vers
+          xcrun --find metal || echo "no metal compiler"
+      - name: Build without code signing
+        script: |
+          set -o pipefail
+          xcodebuild -project StereoVision.xcodeproj \
+            -target StereoVision -configuration Release -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO build 2>&1 | tail -40
+      - name: Package unsigned IPA
+        script: |
+          APP="build/Build/Products/Release-iphoneos/StereoVision.app"
+          test -d "$APP" || { echo "app not found"; exit 1; }
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist"
+          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP/Info.plist"
+          rm -rf Payload && mkdir -p Payload && cp -R "$APP" Payload/
+          zip -qry StereoVision-unsigned.ipa Payload
+          ls -lh StereoVision-unsigned.ipa
+    artifacts:
+      - StereoVision-unsigned.ipa
+      - build/Build/Products/Release-iphoneos/StereoVision.app
