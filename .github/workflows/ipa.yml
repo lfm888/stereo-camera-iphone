@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       with_yolo:
-        description: "Also export + embed the YOLO11n-seg CoreML model (slow, ~10 min)"
+        description: "Bundle the YOLO11n-seg CoreML model (exported on Linux, ~6 min extra)"
         type: boolean
         default: false
   push:
@@ -19,15 +19,38 @@ permissions:
   contents: read
 
 jobs:
+  # Optional: convert YOLO11n-seg -> CoreML. Runs on Linux because the pinned
+  # torch/torchvision wheels no longer exist for macOS x86_64.
+  model:
+    if: ${{ inputs.with_yolo }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Export YOLO11n-seg to CoreML
+        run: |
+          python -m pip install --upgrade pip
+          pip install "torch==2.5.1" "torchvision==0.20.1" "numpy<2" "coremltools==8.1" ultralytics
+          yolo export model=yolo11n-seg.pt format=coreml imgsz=640 nms=False
+          ls -la yolo11n-seg.mlpackage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yolo-model
+          path: yolo11n-seg.mlpackage
+          if-no-files-found: error
+
   build:
-    # macOS *arm64* hosted runners (macos-15 / macos-26) are heavily capacity constrained and often
-    # never get assigned; the x64 image (macos-15-intel) is not. A device build (iphoneos, arm64)
-    # is produced identically on either host, so x64 is tried first.
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-15-intel]
-    runs-on: ${{ matrix.runner }}
+    needs: [model]
+    if: ${{ !cancelled() && needs.model.result != 'failure' }}
+    # macOS *arm64* hosted runners (macos-15 / macos-26) are capacity constrained and often never
+    # get assigned; the x64 image (macos-15-intel) is not, and produces the same arm64 iOS binary.
+    runs-on: macos-15-intel
     timeout-minutes: 60
 
     steps:
@@ -35,21 +58,17 @@ jobs:
 
       - name: Show toolchain
         run: |
-          echo "runner: ${{ matrix.runner }}"
           uname -m
           xcodebuild -version
           xcrun --find metal
-          xcodebuild -project StereoVision.xcodeproj -list || true
+          xcodebuild -project StereoVision.xcodeproj -list
 
-      # Optional: convert YOLO11n-seg to CoreML so object detection uses the 80-class model
-      - name: Export YOLO model (optional)
-        if: ${{ inputs.with_yolo }}
-        run: |
-          brew install uv || curl -LsSf https://astral.sh/uv/install.sh | sh
-          export PATH="$HOME/.local/bin:$PATH"
-          chmod +x scripts/export_yolo.sh
-          scripts/export_yolo.sh
-          ls -la StereoVision/Models || true
+      - name: Fetch YOLO model
+        if: needs.model.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: yolo-model
+          path: StereoVision/Models
 
       - name: Build (no code signing)
         run: |
@@ -72,17 +91,16 @@ jobs:
       - name: Package unsigned IPA
         run: |
           APP="build/Build/Products/Release-iphoneos/StereoVision.app"
-          test -d "$APP" || (echo "app not found" && exit 1)
-          echo "--- bundle info ---"
+          test -d "$APP" || { echo "app not found"; exit 1; }
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP/Info.plist"
-          rm -rf Payload && mkdir -p Payload
-          cp -R "$APP" Payload/
+          ls -la "$APP" | head -20
+          rm -rf Payload && mkdir -p Payload && cp -R "$APP" Payload/
           zip -qry StereoVision-unsigned.ipa Payload
           ls -lh StereoVision-unsigned.ipa
 
       - uses: actions/upload-artifact@v4
         with:
-          name: StereoVision-unsigned-ipa-${{ matrix.runner }}
+          name: StereoVision-unsigned-ipa
           path: StereoVision-unsigned.ipa
           if-no-files-found: error
