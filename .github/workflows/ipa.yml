@@ -20,8 +20,14 @@ permissions:
 
 jobs:
   build:
-    # macos-15 ships Xcode 16.x with the Metal compiler bundled (no MetalToolchain download needed)
-    runs-on: macos-15
+    # macOS *arm64* hosted runners (macos-15 / macos-26) are heavily capacity constrained and often
+    # never get assigned; the x64 image (macos-15-intel) is not. A device build (iphoneos, arm64)
+    # is produced identically on either host, so x64 is tried first.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
 
     steps:
@@ -29,6 +35,8 @@ jobs:
 
       - name: Show toolchain
         run: |
+          echo "runner: ${{ matrix.runner }}"
+          uname -m
           xcodebuild -version
           xcrun --find metal
           xcodebuild -project StereoVision.xcodeproj -list || true
@@ -74,6 +82,6 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: StereoVision-unsigned-ipa
+          name: StereoVision-unsigned-ipa-${{ matrix.runner }}
           path: StereoVision-unsigned.ipa
           if-no-files-found: error
