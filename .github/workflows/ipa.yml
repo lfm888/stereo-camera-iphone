@@ -38,11 +38,14 @@ jobs:
           pip install "torch==2.5.1" "torchvision==0.20.1" "numpy<2" "coremltools==8.1" ultralytics
           yolo export model=yolo11n-seg.pt format=coreml imgsz=640 nms=False
           ls -la yolo11n-seg.mlpackage
+          # keep the directory structure when round-tripping through an artifact
+          tar czf yolo-model.tgz yolo11n-seg.mlpackage
+          ls -lh yolo-model.tgz
 
       - uses: actions/upload-artifact@v4
         with:
           name: yolo-model
-          path: yolo11n-seg.mlpackage
+          path: yolo-model.tgz
           if-no-files-found: error
 
   build:
@@ -68,7 +71,15 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: yolo-model
-          path: StereoVision/Models
+          path: /tmp/yolo
+
+      - name: Unpack YOLO model
+        if: needs.model.result == 'success'
+        run: |
+          mkdir -p StereoVision/Models
+          tar xzf /tmp/yolo/yolo-model.tgz -C StereoVision/Models
+          ls -la StereoVision/Models
+          ls -la StereoVision/Models/*.mlpackage | head
 
       - name: Build (no code signing)
         run: |
@@ -86,7 +97,9 @@ jobs:
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
             ONLY_ACTIVE_ARCH=NO \
-            build 2>&1 | tail -60
+            build > /tmp/build.log 2>&1 || { tail -80 /tmp/build.log; exit 1; }
+          grep -E "Compile YOLO|coremlcompiler|no model in|BUILD SUCCEEDED|error:" /tmp/build.log | head -20 || true
+          tail -5 /tmp/build.log
 
       - name: Package unsigned IPA
         run: |
@@ -95,6 +108,7 @@ jobs:
           /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist"
           /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$APP/Info.plist"
           ls -la "$APP" | head -20
+          find "$APP" -maxdepth 1 -name "*.mlmodelc" -exec du -sh {} \;
           rm -rf Payload && mkdir -p Payload && cp -R "$APP" Payload/
           zip -qry StereoVision-unsigned.ipa Payload
           ls -lh StereoVision-unsigned.ipa
