@@ -68,6 +68,8 @@ struct FrameReport: Sendable {
     var fps: Double
     var gpuMs: Double
     var baselineMM: Float
+    var baselineDeg: Float
+    var hasExtrinsics: Bool
     var K: Intrinsics
     var depthSize: CGSize
     var aspect: CGFloat
@@ -125,7 +127,8 @@ final class Pipeline: @unchecked Sendable {
         stamps.append(now)
         stamps.removeAll { now - $0 > 1 }
         let a = analyzer.analyze(f, detections: det.items, seq: det.seq, now: now)
-        publish?(FrameReport(analysis: a, fps: Double(stamps.count), gpuMs: f.gpuMs, baselineMM: f.baselineMM, K: f.K,
+        publish?(FrameReport(analysis: a, fps: Double(stamps.count), gpuMs: f.gpuMs, baselineMM: f.baselineMM, baselineDeg: f.baselineDeg,
+                             hasExtrinsics: engine.hasExtrinsics, K: f.K,
                              depthSize: CGSize(width: f.width, height: f.height),
                              aspect: CGFloat(f.color.width) / CGFloat(f.color.height), calibration: cal))
     }
@@ -159,6 +162,8 @@ final class AppModel {
     private(set) var fps = 0.0
     private(set) var gpuMs = 0.0
     private(set) var baselineMM: Float = 0
+    private(set) var baselineDeg: Float = 0
+    private(set) var hasExtrinsics = true
     private(set) var K = Intrinsics(fx: 1, fy: 1, cx: 0, cy: 0)
     private(set) var depthSize = CGSize(width: 1, height: 1)
     private(set) var aspect: CGFloat = 16 / 9
@@ -235,7 +240,7 @@ final class AppModel {
             "p1": Int(p1), "p2": Int(p2),
             "uniqueness": uniqueness,
             "range_m": [minZ, maxZ],
-            "rectification": ["flip": flip, "dy_px": yOffset],
+            "rectification": ["flip": flip, "dy_px": yOffset, "baseline_angle_deg": baselineDeg, "camera_extrinsics": hasExtrinsics],
             "detector": detectorName,
         ]
     }
@@ -260,6 +265,8 @@ final class AppModel {
         fps = r.fps
         gpuMs = r.gpuMs
         baselineMM = r.baselineMM
+        baselineDeg = r.baselineDeg
+        hasExtrinsics = r.hasExtrinsics
         K = r.K
         depthSize = r.depthSize
         if abs(aspect - r.aspect) > 0.01 { aspect = r.aspect }

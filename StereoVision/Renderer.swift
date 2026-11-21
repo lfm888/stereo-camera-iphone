@@ -124,6 +124,7 @@ final class Renderer: NSObject, MTKViewDelegate {
             enc.setFragmentTexture(frame.right ?? frame.color, index: 1)
             enc.setFragmentTexture(frame.depth, index: 2)
             enc.setFragmentTexture(labelTex, index: 3)
+            enc.setFragmentTexture(frame.pairLeft ?? frame.color, index: 4)
             enc.setFragmentBytes(&p, length: MemoryLayout<DisplayParams>.stride, index: 0)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }

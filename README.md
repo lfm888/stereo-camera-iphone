@@ -4,7 +4,7 @@
 
 StereoVision turns the two rear cameras of an iPhone (wide + ultra-wide) into a real-time **stereo camera**. It measures how far things are, recognizes and outlines objects (80 everyday classes: people, chairs, bottles, laptops…), and shows the scene in 9 different ways, from a classic depth map to a navigable 3D point cloud.
 
-> **Tested only on iPhone 16.** Other iPhones with wide + ultra-wide rear cameras should work, but camera formats, calibration and performance may differ. The LiDAR source has never been run on a real device.
+> **Tested on iPhone 16 and iPhone 15 Plus.** Any iPhone with a wide + ultra-wide rear camera pair should work, whatever the layout of the two lenses: the app reads the pair's extrinsics, so a vertical pair (iPhone 16), a diagonal one (iPhone 13–15) or a horizontal one are all rectified correctly. Camera formats, calibration and performance may differ. The LiDAR source has never been run on a real device.
 
 This is a personal study project, not tied to any course assignment or exam. I built it to get a hands-on understanding of concepts covered in my Artificial Vision lectures: epipolar geometry, rectification, stereo matching, triangulation and object detection. Seeing them run live on a phone made them much easier to grasp.
 
@@ -51,12 +51,23 @@ $$Z = \frac{f \cdot B}{d}$$
 
 - $Z$: distance from the camera (m)
 - $f$: focal length (px), about 470 px at the 640 × 360 working resolution
-- $B$: baseline, the distance between the two lenses, about 1 cm on iPhone 16
+- $B$: baseline, the distance between the two lenses: ≈ 1 cm on iPhone 16, ≈ 1.4 cm on the diagonal pair of an iPhone 15 Plus
 - $d$: disparity (px)
 
 To find $d$ for every pixel the app uses **Semi-Global Matching (SGM)**. Each pixel is compared with candidate matches in the other image. The algorithm then favors smooth surfaces and penalizes jumps, using two penalties: $P_1$ for 1-pixel steps and $P_2$ for real depth edges. A **left-right consistency check** then throws away pixels where the two views disagree, typically occluded areas or wrong matches. An object's lateral position and size then follow from the pinhole camera model:
 
 $$X = \frac{(u - c_x)\,Z}{f} \qquad W_{\text{object}} = \frac{w_{\text{px}}\,Z}{f}$$
+
+### Lens layout
+
+Rectification rotates both images so that the epipolar lines run along the image rows, because the matcher only searches along $x$. Where the two lenses sit decides how much of a rotation that is:
+
+| Phone | Lenses (in landscape) | Rectification roll |
+|---|---|---|
+| iPhone 16 | side by side, horizontal baseline | ≈ 0° |
+| iPhone 15 Plus and other 13–15 models | on a diagonal, baseline at ≈ ±45° | ≈ 45° |
+
+With a diagonal pair the rectified images therefore come out rolled, and showing them directly would give a tilted picture with black corners. The app instead keeps the matching in the rolled frame and then rotates the depth map back into the wide camera's own frame with the homography $M = K R_{\text{rect}} K^{-1}$, the inverse of the roll. The result is that the screen shows the plain, upright camera image (and the object masks, boxes, point cloud and exports all refer to it), while the *Rectified pair* view still shows the rolled pair, which is the one where matching points must share a green line. The depth maps of these phones lose the four corners of the frame, because they fall outside the rolled rectangle. The HUD shows the baseline angle $\beta$; when it is close to ±45° the phone has a diagonal pair.
 
 ## Limits
 
@@ -131,4 +142,4 @@ scripts/export_yolo.sh                                   # downloads and convert
 open StereoVision.xcodeproj                              # Run on your iPhone
 ```
 
-Without the YOLO model the app still works and falls back to Apple's built-in detectors (people, animals, salient objects). Hold the phone in **landscape**, with the Dynamic Island on the left.
+Without the YOLO model the app still works and falls back to Apple's built-in detectors (people, animals, salient objects). Hold the phone in **landscape**, with the Dynamic Island on the left. On a phone whose lenses sit on a diagonal, either landscape orientation works and the picture stays upright; on iPhone 16 keep the Dynamic Island on the left.

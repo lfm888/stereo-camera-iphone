@@ -82,10 +82,14 @@ struct HUD: View {
             Text(model.mode.title).font(.headline)
             Text("\(Int(model.fps)) fps" + (model.source == .stereo ? String(format: " · GPU %.1f ms", model.gpuMs) : ""))
             if model.source == .stereo {
-                Text(String(format: "B %.1f mm · f %.0f px · Δy %.2f px%@", model.baselineMM, model.K.fx, model.yOffset, model.flip ? " · ⇄" : ""))
-                Text(model.matcher == .sgm ? "SGM-4 · D \(model.maxDisparity)" + (model.lrCheck ? " · LR" : "") : "Block 5×5 · D \(model.maxDisparity)")
+                Text(String(format: "B %.1f mm · β %+.0f° · f %.0f px", model.baselineMM, model.baselineDeg, model.K.fx))
+                Text(String(format: "Δy %.2f px%@", model.yOffset, model.flip ? " · ⇄" : "")
+                     + (model.matcher == .sgm ? " · SGM-4 · D \(model.maxDisparity)" + (model.lrCheck ? " · LR" : "") : " · Block · D \(model.maxDisparity)"))
             } else {
                 Text("\(model.source.title) · \(Int(model.depthSize.width))×\(Int(model.depthSize.height)) · f \(Int(model.K.fx)) px")
+            }
+            if model.source == .stereo && !model.hasExtrinsics {
+                Text("No lens extrinsics: assuming a side-by-side pair").foregroundStyle(.yellow)
             }
             if model.calibrating { Text("Epipolar auto-calibration…").foregroundStyle(.yellow) }
             if let start = model.capture.recordingStart {
@@ -191,6 +195,10 @@ struct SettingsView: View {
                     slider("Uniqueness", $model.uniqueness, 0...0.5, "%.2f")
                     slider("Vertical offset Δy", $model.yOffset, -12...12, "%.2f px")
                     Toggle("Flip baseline (⇄)", isOn: $model.flip)
+                    Text(model.baselineDeg > 20 || model.baselineDeg < -20
+                         ? "This phone has the two lenses on a diagonal, so the images are rectified with a roll and the depth map is then rotated back to keep the picture upright. The frame corners can lack depth."
+                         : "The two lenses sit side by side, so rectification only needs a small correction.")
+                        .font(.caption).foregroundStyle(.secondary)
                     Button("Auto-calibrate rectification") { model.calibrate(); dismiss() }
                 }
                 .disabled(model.source != .stereo)
@@ -205,6 +213,7 @@ struct SettingsView: View {
                         ForEach(DepthSource.available) { Text($0.title).tag($0) }
                     }
                     LabeledContent("Baseline", value: String(format: "%.2f mm", model.baselineMM))
+                    LabeledContent("Baseline angle", value: String(format: "%+.1f°", model.baselineDeg))
                     LabeledContent("Focal length", value: String(format: "%.1f px", model.K.fx))
                     LabeledContent("Principal point", value: String(format: "%.1f, %.1f", model.K.cx, model.K.cy))
                     LabeledContent("Depth map", value: "\(Int(model.depthSize.width))×\(Int(model.depthSize.height))")

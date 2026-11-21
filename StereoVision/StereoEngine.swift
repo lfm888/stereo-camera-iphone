@@ -9,6 +9,7 @@ struct Intrinsics: Sendable {
 
 final class StereoFrame: @unchecked Sendable {
     let color: MTLTexture
+    let pairLeft: MTLTexture?
     let right: MTLTexture?
     let depth: MTLTexture
     let width: Int, height: Int
@@ -16,12 +17,14 @@ final class StereoFrame: @unchecked Sendable {
     let image: CVPixelBuffer
     let gpuMs: Double
     let baselineMM: Float
+    let baselineDeg: Float
     private let buffer: MTLBuffer
     private let rowStride: Int
     private let retained: [AnyObject]
 
-    init(color: MTLTexture, right: MTLTexture?, target: DepthTarget, K: Intrinsics, image: CVPixelBuffer, gpuMs: Double, baselineMM: Float, retained: [AnyObject]) {
+    init(color: MTLTexture, pairLeft: MTLTexture? = nil, right: MTLTexture?, target: DepthTarget, K: Intrinsics, image: CVPixelBuffer, gpuMs: Double, baselineMM: Float, baselineDeg: Float = 0, retained: [AnyObject]) {
         self.color = color
+        self.pairLeft = pairLeft
         self.right = right
         self.depth = target.texture
         self.buffer = target.buffer
@@ -32,6 +35,7 @@ final class StereoFrame: @unchecked Sendable {
         self.image = image
         self.gpuMs = gpuMs
         self.baselineMM = baselineMM
+        self.baselineDeg = baselineDeg
         self.retained = retained
     }
 
@@ -112,6 +116,7 @@ final class StereoEngine: @unchecked Sendable {
     let device: MTLDevice
     private let queue: MTLCommandQueue
     private let rectifyPSO, censusPSO, matchPSO, depthPSO: MTLComputePipelineState
+    private let unrectPSO: MTLComputePipelineState
     private let costPSO, pathPSO, wtaRightPSO, wtaLeftPSO: MTLComputePipelineState
     private let costBuffer, sumBuffer: MTLBuffer
     private let dispRight: MTLTexture
@@ -127,7 +132,7 @@ final class StereoEngine: @unchecked Sendable {
     private(set) var hasExtrinsics = false
 
     private final class Slot {
-        let right, censusL, censusR, disp, cost: MTLTexture
+        let right, censusL, censusR, disp, cost, depthRolled: MTLTexture
         let target: DepthTarget
 
         init(device: MTLDevice, w: Int, h: Int) {
@@ -141,6 +146,7 @@ final class StereoEngine: @unchecked Sendable {
             censusL = tex(.rg32Uint)
             censusR = tex(.rg32Uint)
             disp = tex(.r32Float)
+            depthRolled = tex(.r32Float)
             cost = tex(.r32Float, shared: true)
             target = DepthTarget(device: device, width: w, height: h)
         }
@@ -148,10 +154,12 @@ final class StereoEngine: @unchecked Sendable {
 
     struct Geometry {
         var MW: simd_float3x3, MU: simd_float3x3
+        var MUp: simd_float3x3
         var K: Intrinsics
         var dir: Int32
         var fB: Float
         var baselineMM: Float
+        var baselineDeg: Float
     }
 
     init(device: MTLDevice) {
@@ -163,6 +171,7 @@ final class StereoEngine: @unchecked Sendable {
         censusPSO = pso("census")
         matchPSO = pso("match")
         depthPSO = pso("toDepth")
+        unrectPSO = pso("unrectifyDepth")
         costPSO = pso("costVolume")
         pathPSO = pso("sgmPath")
         wtaRightPSO = pso("wtaRight")
@@ -227,7 +236,12 @@ final class StereoEngine: @unchecked Sendable {
         let T = simd_float3x3(columns: (SIMD3(1, 0, 0), SIMD3(0, 1, 0), SIMD3(0, dy, 1)))
         let back = Rr.transpose * Kr.inverse
         let baseline = simd_length(t)
-        return Geometry(MW: KW * back, MU: KU * R.transpose * back * T, K: K, dir: Int32(dir), fB: K.fx * baseline / 1000, baselineMM: baseline)
+        // The rectified frame is rolled by the baseline direction, so it is tilted on phones whose two
+        // lenses sit on a diagonal (iPhone 13-15). MUp brings pixels back to the wide camera's own
+        // frame: the rectified ray of MUp*p is the same ray as p, and Z is the same along both axes.
+        let MUp = Kr * Rr * Kr.inverse
+        let baselineDeg = Float(atan2(Double(t.y), Double(t.x)) * 180 / .pi)
+        return Geometry(MW: KW * back, MU: KU * R.transpose * back * T, MUp: MUp, K: K, dir: Int32(dir), fB: K.fx * baseline / 1000, baselineMM: baseline, baselineDeg: baselineDeg)
     }
 
     private func dispatch(_ enc: MTLComputeCommandEncoder, _ pso: MTLComputePipelineState, _ textures: [MTLTexture], buffers: [MTLBuffer] = [], bytes: UnsafeRawPointer? = nil, length: Int = 0) {
@@ -274,6 +288,7 @@ final class StereoEngine: @unchecked Sendable {
 
     private struct Inputs {
         let wTex: MTLTexture, uTex: MTLTexture
+        let wpb: CVPixelBuffer, upb: CVPixelBuffer
         let KW: simd_float3x3, KU: simd_float3x3
         let keep: [AnyObject]
     }
@@ -282,7 +297,7 @@ final class StereoEngine: @unchecked Sendable {
         guard let wpb = CMSampleBufferGetImageBuffer(wide), let upb = CMSampleBufferGetImageBuffer(ultra),
               let (wTex, wcv) = texture(wpb), let (uTex, ucv) = texture(upb) else { return nil }
         let ws = SIMD2(Float(wTex.width), Float(wTex.height)), us = SIMD2(Float(uTex.width), Float(uTex.height))
-        return Inputs(wTex: wTex, uTex: uTex, KW: intrinsics(wide, fov: wideFOV, size: ws), KU: intrinsics(ultra, fov: ultraFOV, size: us), keep: [wcv, ucv])
+        return Inputs(wTex: wTex, uTex: uTex, wpb: wpb, upb: upb, KW: intrinsics(wide, fov: wideFOV, size: ws), KU: intrinsics(ultra, fov: ultraFOV, size: us), keep: [wcv, ucv])
     }
 
     func stereo(_ wide: CMSampleBuffer, _ ultra: CMSampleBuffer, _ s: PipelineSettings) -> StereoFrame? {
@@ -300,12 +315,18 @@ final class StereoEngine: @unchecked Sendable {
         dispatch(enc, censusPSO, [slot.right, slot.censusR])
         if s.matcher == .sgm { encodeSGM(enc, slot, lTex, g, s) } else { encodeMatch(enc, slot, g, s) }
         var d = DepthParams(fB: g.fB, minZ: s.minZ, maxZ: s.maxZ, pad: 0)
-        dispatch(enc, depthPSO, [slot.disp, slot.target.texture], bytes: &d, length: MemoryLayout<DepthParams>.stride)
+        dispatch(enc, depthPSO, [slot.disp, slot.depthRolled], bytes: &d, length: MemoryLayout<DepthParams>.stride)
+        var u = RectParams(M: g.MUp, srcSize: .zero)
+        dispatch(enc, unrectPSO, [slot.depthRolled, slot.target.texture], bytes: &u, length: MemoryLayout<RectParams>.stride)
         enc.endEncoding()
         cb.commit()
         cb.waitUntilCompleted()
         let ms = (cb.gpuEndTime - cb.gpuStartTime) * 1000
-        return StereoFrame(color: lTex, right: slot.right, target: slot.target, K: g.K, image: lpb, gpuMs: ms, baselineMM: g.baselineMM, retained: [lcv])
+        // The view shows the wide camera image itself (upright, whatever the lens layout) with the
+        // depth map un-rolled onto it; the rectified pair stays available for the epipolar check.
+        let retained: [AnyObject] = inp.keep + [lcv, wide]
+        return StereoFrame(color: inp.wTex, pairLeft: lTex, right: slot.right, target: slot.target, K: g.K, image: inp.wpb,
+                           gpuMs: ms, baselineMM: g.baselineMM, baselineDeg: g.baselineDeg, retained: retained)
     }
 
     func calibrate(_ wide: CMSampleBuffer, _ ultra: CMSampleBuffer, _ s: PipelineSettings) -> (flip: Bool, dy: Float) {

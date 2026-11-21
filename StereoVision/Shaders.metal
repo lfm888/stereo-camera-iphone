@@ -24,6 +24,25 @@ kernel void rectify(texture2d<float, access::sample> src [[texture(0)]],
     dst.write(acc * 0.25, gid);
 }
 
+// Rectification rolls both images so that the epipolar lines run along x. With the two lenses of an
+// iPhone 15 Plus (diagonal pair) that roll is about 45 degrees, so the depth map comes out tilted.
+// This kernel maps the depth map back into the wide camera's own frame, which is what the app draws
+// and what the object measurement, point cloud and exports refer to.
+kernel void unrectifyDepth(texture2d<float, access::read> src [[texture(0)]],
+                           texture2d<float, access::write> dst [[texture(1)]],
+                           constant RectParams& p [[buffer(0)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
+    float3 q = p.M * float3(float2(gid) + 0.5, 1.0);
+    if (q.z <= 1e-6f) { dst.write(float4(0.0), gid); return; }
+    float2 s = q.xy / q.z;
+    int x = int(floor(s.x)), y = int(floor(s.y));
+    float z = 0.0;
+    if (x >= 0 && y >= 0 && x < int(src.get_width()) && y < int(src.get_height()))
+        z = src.read(uint2(x, y)).r;
+    dst.write(float4(z), gid);
+}
+
 kernel void census(texture2d<float, access::read> src [[texture(0)]],
                    texture2d<uint, access::write> dst [[texture(1)]],
                    uint2 gid [[thread_position_in_grid]]) {
@@ -282,6 +301,7 @@ fragment float4 displayFragment(VOut in [[stage_in]],
                                 texture2d<float> right [[texture(1)]],
                                 texture2d<float> depth [[texture(2)]],
                                 texture2d<float> labels [[texture(3)]],
+                                texture2d<float> pair [[texture(4)]],
                                 constant DisplayParams& p [[buffer(0)]]) {
     constexpr sampler lin(filter::linear, address::clamp_to_edge);
     constexpr sampler near(filter::nearest, address::clamp_to_edge);
@@ -304,14 +324,14 @@ fragment float4 displayFragment(VOut in [[stage_in]],
         case 4: {
             if (uv.y < 0.25 || uv.y > 0.75) return float4(0.04, 0.04, 0.05, 1);
             float2 q = float2(fract(uv.x * 2.0), (uv.y - 0.25) * 2.0);
-            float3 img = uv.x < 0.5 ? color.sample(lin, q).rgb : (p.hasRight ? right.sample(lin, q).rgb : float3(0));
+            float3 img = uv.x < 0.5 ? pair.sample(lin, q).rgb : (p.hasRight ? right.sample(lin, q).rgb : float3(0));
             float line = fract(q.y * 12.0) < 0.012 ? 1.0 : 0.0;
             img = mix(img, float3(0.1, 1.0, 0.35), line * 0.85);
             if (abs(uv.x - 0.5) < 0.0015) img = float3(1);
             return float4(img, 1);
         }
         case 5: {
-            float l = dot(c, kLuma);
+            float l = dot(pair.sample(lin, uv).rgb, kLuma);
             float r = p.hasRight ? dot(right.sample(lin, uv).rgb, kLuma) : l;
             return float4(l, r, r, 1);
         }
