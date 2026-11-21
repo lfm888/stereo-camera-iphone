@@ -1,147 +1,155 @@
 <p align="center"><img src="docs/logo.png" width="240" alt="StereoVision"></p>
 
-<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" width="800" alt="StereoVision demo on an iPhone 15 Plus: live depth, object masks, measurements and the point cloud"></a><br><sub>Recorded on an iPhone 15 Plus — click for the 0.8 MB MP4</sub></p>
+<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" width="800" alt="StereoVision 在 iPhone 15 Plus 上的演示：实时深度、物体掩码、尺寸测量与点云"></a><br><sub>在 iPhone 15 Plus 上录制 · 点击查看 0.8 MB 的 MP4 原片</sub></p>
 
 # StereoVision
 
-StereoVision turns the two rear cameras of an iPhone (wide + ultra-wide) into a real-time **stereo camera**. It measures how far things are, recognizes and outlines objects (80 everyday classes: people, chairs, bottles, laptops…), and shows the scene in 9 different ways, from a classic depth map to a navigable 3D point cloud.
+> ### 📱 已适配 iPhone 15 Plus 这类「两颗后置摄像头呈对角排列」的机型
+>
+> 原实现是按 iPhone 16 写的：两摄竖排，横屏后基线正好水平，配准不需要滚转。iPhone 15 Plus 的两颗镜头在对角线上，横屏后基线相对画面约 ±45°，而立体匹配只能沿图像行搜索，所以配准必须把两幅图一起滚转——若直接显示，画面就是歪的、四角大片黑边。
+>
+> 现在的做法：匹配仍在滚转后的坐标系里进行，再用单应 $M = K R_{\text{rect}} K^{-1}$ 把深度图反向旋转回**广角镜头自身的坐标系**。于是画面保持正立，物体掩码、检测框、点云与导出数据也都统一在这个坐标系里；*Rectified pair* 视图保留滚转后的配准对，用于检查极线对齐。代价是这类机型的深度图会丢掉画面四角（落在滚转矩形之外）。
+>
+> HUD 里的基线角度 $\beta$ 可以直接确认镜头排布：接近 0°/180° 为左右并排，接近 ±45°/±135° 为对角排列（本页演示视频中为 −135°）。细节见 [镜头排布](#镜头排布)。
 
-> **Tested on iPhone 16 and iPhone 15 Plus.** Any iPhone with a wide + ultra-wide rear camera pair should work, whatever the layout of the two lenses: the app reads the pair's extrinsics, so a vertical pair (iPhone 16), a diagonal one (iPhone 13–15) or a horizontal one are all rectified correctly. Camera formats, calibration and performance may differ. The LiDAR source has never been run on a real device.
+StereoVision 把 iPhone 的后置双摄（广角 + 超广角）变成一台实时的**立体相机**：测出物体的远近，识别并勾出物体轮廓（COCO 的 80 个日常类别：人、椅子、瓶子、笔记本……），并用 9 种方式呈现场景，从经典深度图到可以拖动旋转的 3D 点云。
 
-This is a personal study project, not tied to any course assignment or exam. I built it to get a hands-on understanding of concepts covered in my Artificial Vision lectures: epipolar geometry, rectification, stereo matching, triangulation and object detection. Seeing them run live on a phone made them much easier to grasp.
+> **已在 iPhone 16 与 iPhone 15 Plus 上测试。** 只要 iPhone 有「广角 + 超广角」后置双摄就能跑，与两颗镜头的排布无关：程序会读取这对镜头的外参，因此竖排（iPhone 16）、对角（iPhone 13–15）或水平排布都能被正确配准。相机格式、标定与帧率可能因机型而异。LiDAR 数据源尚未在真机上运行过。
 
-The full stereo pipeline (rectification, matching, triangulation) is written from scratch and runs on the GPU. You can switch to Apple's own depth, or to the LiDAR scanner on Pro models, at any time to compare them.
+这是一个个人学习项目，与任何课程作业或考试无关。写它是为了把「人工视觉」课上的概念真正跑起来：对极几何、配准、立体匹配、三角测量与目标检测——看着它们在手机上实时运行，比看公式好懂得多。
 
-## What it does
+完整的立体流程（配准、匹配、三角测量）都是从零写的，全部跑在 GPU 上。你随时可以切换到 Apple 自己的深度，或 Pro 机型上的 LiDAR 扫描仪，用来做对比。
 
-- **Live depth** at roughly 20+ fps on iPhone 16
-- **Object detection and segmentation** with YOLO11n-seg: each object gets a label, a confidence score, a colored mask and an ID that follows it from frame to frame
-- **Metric measurements** for every object: distance, lateral offset and approximate width × height in cm
-- **Tap to measure** any point; the crosshair always shows the distance at the center
-- **Three depth sources**: the custom stereo matcher (default), Apple's Dual-Wide depth, and LiDAR on iPhone Pro models (12 Pro and later). The LiDAR option only appears on phones that have the sensor. It measures distance directly with laser time-of-flight, so it works on textureless walls where stereo fails and reaches about 5 m. That makes it a good ground truth for evaluating the stereo matcher
-- **Photo and video capture** of exactly what's on screen (current view mode with masks, labels and distances), saved to Photos. Videos are HEVC 1280 px at 30 fps
-- **Raw data export** with every photo, for offline analysis (Python, OpenCV, MeshLab…), in *Files › On My iPhone › StereoVision*:
+## 功能
 
-  | File | Content |
+- **实时深度**：在 iPhone 16 上约 20+ fps
+- **目标检测与分割**：使用 YOLO11n-seg，每个物体都有类别、置信度、彩色掩码，以及一个跨帧跟随它的 ID
+- **尺寸测量**：每个物体给出距离、横向偏移和近似宽 × 高（cm）
+- **点选测距**：点屏幕上任意一点即可测距；准星始终显示画面中心的距离
+- **三种深度来源**：自研立体匹配（默认）、Apple 的 Dual-Wide 深度、以及 iPhone Pro（12 Pro 及以后）上的 LiDAR。没有该传感器的机型不会出现 LiDAR 选项。LiDAR 用激光飞行时间直接测距，在立体视觉失效的无纹理墙面上也能工作，量程约 5 m，因此很适合作为评估立体匹配的真值
+- **拍照与录像**：录下的正是屏幕上看到的内容（当前视图模式，含掩码、标签与距离），保存到「照片」。视频为 HEVC、1280 px、30 fps
+- **原始数据导出**：每次拍照都会在 *文件 › 我的 iPhone › StereoVision* 里导出一份，便于离线分析（Python、OpenCV、MeshLab……）：
+
+  | 文件 | 内容 |
   |---|---|
-  | `view.png` | the composited view, as saved to Photos |
-  | `rgb.png` | the color image the depth refers to |
-  | `depth_mm.png` | 16-bit grayscale depth in millimeters (0 = invalid) |
-  | `cloud.ply` | colored point cloud in meters (x right, y down, z forward) |
-  | `meta.json` | intrinsics, baseline, depth source and settings, detected objects with distance and size |
-- **Automatic calibration** of the camera alignment at startup, with manual fine-tuning in Settings
+  | `view.png` | 合成后的画面，与存入「照片」的内容一致 |
+  | `rgb.png` | 深度所对应的彩色图 |
+  | `depth_mm.png` | 16 位灰度深度，单位毫米（0 = 无效） |
+  | `cloud.ply` | 彩色点云，单位米（x 向右、y 向下、z 向前） |
+  | `meta.json` | 内参、基线、深度来源与各项设置、检测到的物体及其距离和尺寸 |
+- **自动标定**：启动时自动标定两摄的相对姿态，也可以在设置里手动微调
 
-## View modes
+## 视图模式
 
-| Mode | What you see |
+| 模式 | 看到什么 |
 |---|---|
-| **Standard** | Camera image with object masks, boxes, labels, distance and size |
-| **Depth map** | Distance as color: red is near, blue is far |
-| **Overlay** | Camera image and depth map blended together (adjustable opacity) |
-| **Disparity** | Grayscale image of the raw stereo signal (brighter = closer) |
-| **Rectified pair** | The two camera views side by side with green alignment lines: a matching point must lie on the same line in both images |
-| **Anaglyph** | Red/cyan 3D image, for 3D glasses |
-| **3D segmentation** | The scene split into surfaces and objects by depth alone, without knowing what they are |
-| **Bird's-eye** | Top-down map: field of view, range rings, obstacle profile and detected objects placed on the floor plan |
-| **Point cloud** | The scene rebuilt in 3D: drag to rotate, pinch to zoom, tap to reset |
+| **Standard** | 相机画面 + 物体掩码、检测框、标签、距离与尺寸 |
+| **Depth map** | 用颜色表示距离：红=近，蓝=远 |
+| **Overlay** | 相机画面与深度图叠加（透明度可调） |
+| **Disparity** | 原始视差的灰度图（越亮越近） |
+| **Rectified pair** | 两幅配准后的图并排显示，绿线为对齐参考线：同一个点在两幅图中必须落在同一条线上 |
+| **Anaglyph** | 红/青立体图，配红青眼镜观看 |
+| **3D segmentation** | 只靠深度把场景切成面片与物体，不需要知道它们是什么 |
+| **Bird's-eye** | 俯视图：视场、距离圈、障碍物剖面，以及按位置摆在平面图上的物体 |
+| **Point cloud** | 3D 重建的点云：拖动旋转、双指缩放、点击复位 |
 
-## How depth is measured
+## 距离是怎么算出来的
 
-The two cameras see the scene from slightly different positions. A nearby object shifts more between the two images than a distant one. That shift is the **disparity** $d$, in pixels. Once the images are aligned (*rectified*), distance follows from triangulation:
+两台相机从略微不同的位置看同一个场景，近处物体在两张图之间的位移比远处更大。这个位移就是**视差** $d$（像素）。把两张图对齐（**配准**）之后，距离由三角测量给出：
 
 $$Z = \frac{f \cdot B}{d}$$
 
-- $Z$: distance from the camera (m)
-- $f$: focal length (px), about 470 px at the 640 × 360 working resolution
-- $B$: baseline, the distance between the two lenses: ≈ 1 cm on iPhone 16, ≈ 1.4 cm on the diagonal pair of an iPhone 15 Plus
-- $d$: disparity (px)
+- $Z$：到相机的距离（m）
+- $f$：焦距（px），在 640 × 360 的工作分辨率下约 470 px
+- $B$：基线，两颗镜头的间距：iPhone 16 约 1 cm，iPhone 15 Plus 的对角双摄约 1.4 cm
+- $d$：视差（px）
 
-To find $d$ for every pixel the app uses **Semi-Global Matching (SGM)**. Each pixel is compared with candidate matches in the other image. The algorithm then favors smooth surfaces and penalizes jumps, using two penalties: $P_1$ for 1-pixel steps and $P_2$ for real depth edges. A **left-right consistency check** then throws away pixels where the two views disagree, typically occluded areas or wrong matches. An object's lateral position and size then follow from the pinhole camera model:
+逐像素求 $d$ 用的是**半全局匹配（SGM）**：每个像素与另一幅图中的候选位置比较代价，然后算法倾向于平滑表面、惩罚跳变，用两个惩罚项 $P_1$（1 像素的小台阶）和 $P_2$（真正的深度边缘）。接着**左右一致性检查**丢掉两视图不一致的像素，通常是遮挡区域或错误匹配。物体的横向位置与尺寸再由针孔模型得到：
 
 $$X = \frac{(u - c_x)\,Z}{f} \qquad W_{\text{object}} = \frac{w_{\text{px}}\,Z}{f}$$
 
-### Lens layout
+### 镜头排布
 
-Rectification rotates both images so that the epipolar lines run along the image rows, because the matcher only searches along $x$. Where the two lenses sit decides how much of a rotation that is:
+配准要把两幅图一起旋转，使极线落在图像的行方向上——因为匹配器只沿 $x$ 搜索。旋转多少由两颗镜头的位置决定：
 
-| Phone | Lenses (in landscape) | Rectification roll |
+| 机型 | 镜头位置（横屏时） | 配准滚转角 |
 |---|---|---|
-| iPhone 16 | side by side, horizontal baseline | ≈ 0° |
-| iPhone 15 Plus and other 13–15 models | on a diagonal, baseline at ≈ ±45° | ≈ 45° |
+| iPhone 16 | 左右并排，基线水平 | ≈ 0° |
+| iPhone 15 Plus 及 13–15 系列 | 呈对角，基线约 ±45° | ≈ 45° |
 
-With a diagonal pair the rectified images therefore come out rolled, and showing them directly would give a tilted picture with black corners. The app instead keeps the matching in the rolled frame and then rotates the depth map back into the wide camera's own frame with the homography $M = K R_{\text{rect}} K^{-1}$, the inverse of the roll. The result is that the screen shows the plain, upright camera image (and the object masks, boxes, point cloud and exports all refer to it), while the *Rectified pair* view still shows the rolled pair, which is the one where matching points must share a green line. The depth maps of these phones lose the four corners of the frame, because they fall outside the rolled rectangle. The HUD shows the baseline angle $\beta$: near 0° or 180° the lenses are side by side, near ±45° or ±135° they are on a diagonal.
+对角排布时，配准结果整体被滚转，直接显示就会得到一幅歪掉、四角发黑的画面。为此程序把匹配留在滚转后的坐标系里，再用单应 $M = K R_{\text{rect}} K^{-1}$（滚转的逆变换）把深度图转回广角镜头自身的坐标系。这样屏幕上看到的是原始、正立的相机画面，物体掩码、检测框、点云与导出数据都基于这个坐标系；而 *Rectified pair* 视图仍然显示滚转后的配准对——它才是「匹配点必须共享同一条绿线」的那个视图。这类机型的深度图会丢掉画面四角，因为四角落在滚转矩形之外。HUD 里的基线角度 $\beta$：接近 0° 或 180° 是左右并排，接近 ±45° 或 ±135° 是对角排列。
 
-## Limits
+## 局限
 
-The main limit is physical: **the baseline is tiny** (≈ 1 cm, versus ≈ 6.5 cm between human eyes). The figures below use $f \cdot B \approx 4.7\ \text{px}\cdot\text{m}$; the app's HUD shows the real $B$ and $f$ of your device.
+最主要的限制来自物理：**基线太窄**（≈ 1 cm，而人眼间距 ≈ 6.5 cm）。下面的数字按 $f \cdot B \approx 4.7\ \text{px}\cdot\text{m}$ 计算；App 的 HUD 会显示你真机上的 $B$ 与 $f$。
 
-**Depth error grows with the square of the distance.** Differentiating $Z = fB/d$:
+**深度误差随距离的平方增长。** 对 $Z = fB/d$ 求导：
 
 $$\Delta Z \approx \frac{Z^2}{f \cdot B}\,\Delta d$$
 
-With sub-pixel accuracy $\Delta d \approx 0.2$ px:
+取亚像素精度 $\Delta d \approx 0.2$ px：
 
-| Distance | Expected depth error |
+| 距离 | 预期深度误差 |
 |---|---|
 | 0.5 m | ± 1 cm |
 | 1 m | ± 4 cm |
 | 2 m | ± 17 cm |
 | 3 m | ± 38 cm |
 
-**Maximum useful range.** At $d = 1$ px, $Z = fB \approx 4.7$ m. Beyond 2–3 m the measurement is mostly noise. That's physics, not a bug.
+**最大有效量程。** 当 $d = 1$ px 时 $Z = fB \approx 4.7$ m；超过 2–3 m 后基本就是噪声了。这是物理限制，不是 bug。
 
-**Minimum distance.** It is set by the largest disparity searched, $Z_{min} = fB / d_{max}$:
+**最近距离。** 由搜索的最大视差决定，$Z_{min} = fB / d_{max}$：
 
-| Max disparity | Closest measurable point |
+| 最大视差 | 最近可测距离 |
 |---|---|
 | 32 px | ≈ 15 cm |
-| 64 px (default) | ≈ 7 cm |
+| 64 px（默认） | ≈ 7 cm |
 | 96 px | ≈ 5 cm |
 
-In practice the *Min* depth range in Settings (default 12 cm) also clips anything closer, and cameras can't focus that close anyway.
+实际上设置里的 *Min* 深度范围（默认 12 cm）也会截掉更近的部分，而且镜头本来也合不了那么近的焦。
 
-**Lateral resolution.** One pixel covers $Z/f$ meters, about 2 mm at 1 m and 4 mm at 2 m. Object sizes inherit the depth error: a 10% error on $Z$ gives a 10% error on width and height.
+**横向分辨率。** 一个像素覆盖 $Z/f$ 米：1 m 处约 2 mm，2 m 处约 4 mm。物体尺寸会继承深度误差：$Z$ 差 10%，宽高也差 10%。
 
-**Scenes that fool stereo vision:**
+**会骗过立体视觉的场景：**
 
-- **Textureless surfaces** (white walls, uniform tables): there is nothing to match. SGM fills in part of them from the edges, and the rest stays black (invalid)
-- **Reflective or transparent objects** (mirrors, glass, screens): the matched point is the reflection, not the surface
-- **Repetitive patterns** (grids, tiles, blinds): several candidate matches look equally good
-- **Occlusion borders**: a strip next to foreground objects is visible to only one camera. The left-right check marks it invalid
-- **Thin structures** (cables, chair legs) can be smoothed away
-- **Low light and fast motion**: sensor noise and motion blur reduce the number of valid pixels
-- **Image quality gap**: the ultra-wide is upsampled about 2× to match the wide, so it is blurrier, which limits fine detail
-- **Calibration drift**: if depth looks wrong, open *Rectified pair*, check that features sit on the same green line, and press *Calibrate*
+- **无纹理表面**（白墙、光板桌面）：没有可匹配的特征。SGM 会从边缘往里填一部分，其余保持黑色（无效）
+- **反光或透明物体**（镜子、玻璃、屏幕）：匹配到的是反射像，而不是表面本身
+- **重复图案**（网格、瓷砖、百叶窗）：多个候选看起来一样好
+- **遮挡边缘**：前景物体旁的一条窄带只有一台相机看得到，左右一致性检查会把它判为无效
+- **细结构**（线缆、椅子腿）可能被平滑掉
+- **暗光与快速运动**：传感器噪声与运动模糊会减少有效像素
+- **画质差异**：超广角要被上采样约 2× 才能对齐广角，本身就模糊，限制了细节
+- **标定漂移**：如果深度看起来不对，打开 *Rectified pair* 看特征是否落在同一条绿线上，然后按 *Calibrate*
 
-Detection runs asynchronously, so masks can trail slightly behind fast-moving objects.
+检测是异步执行的，所以掩码可能略微滞后于快速运动的物体。
 
-## Performance and accuracy
+## 性能与精度
 
-**Speed (iPhone 16, SGM + left-right check + YOLO11n-seg):** about 20–22 fps, stable. The camera caps at 30 fps. To trade accuracy for speed, reduce the maximum disparity to 32 or switch to block matching in Settings.
+**速度（iPhone 16，SGM + 左右一致性检查 + YOLO11n-seg）：** 约 20–22 fps，稳定。相机上限 30 fps。想用精度换速度，可以把最大视差降到 32，或在设置里切换成块匹配。
 
-**Matching accuracy on a synthetic scene with known disparity** (`swift scripts/verify_stereo.swift`, runs the app's GPU code on a Mac). The scene has a slanted plane, a foreground object and a band with almost no texture (4% contrast):
+**匹配精度**（`swift scripts/verify_stereo.swift`，在 Mac 上直接跑 App 的 GPU 代码；合成场景的视差已知，含一个斜面、一个前景物体，以及一条几乎没有纹理的区域（对比度 4%））：
 
-| Algorithm | Correct (±1 px) | Wrong | Invalid |
+| 算法 | 正确（±1 px） | 错误 | 无效 |
 |---|---|---|---|
-| Block matching 5×5 | 62.2% | 6.5% | 31.2% |
-| SGM, 4 paths | 75.2% | 13.9% | 10.8% |
-| SGM + left-right check | 72.4% | 9.3% | 18.3% |
+| 块匹配 5×5 | 62.2% | 6.5% | 31.2% |
+| SGM，4 路径 | 75.2% | 13.9% | 10.8% |
+| SGM + 左右一致性 | 72.4% | 9.3% | 18.3% |
 
-- SGM recovers far more of the low-texture area than block matching: invalid pixels drop from 31% to 11%
-- The left-right check cuts wrong matches by about a third, at the cost of marking some extra pixels invalid
-- Numbers vary slightly between runs because the test texture is random
+- 相比块匹配，SGM 找回了大片低纹理区域：无效像素从 31% 降到 11%
+- 左右一致性检查把错误匹配砍掉约三分之一，代价是多判掉一些无效像素
+- 测试纹理是随机的，每次数字会略有不同
 
-**Distance of detected objects** is the median depth over the inner part of the object's mask, so background pixels inside the bounding box do not bias it. The value is also smoothed over time per tracked object.
+**检测物体的距离**取其掩码内部区域深度的中位数，因此检测框内的背景像素不会把它带偏；数值还会按物体随时间平滑。
 
-## Getting started
+## 快速开始
 
-Requirements: an iPhone with a Dual-Wide camera and iOS 18+, Xcode 26+ with the Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`), and [uv](https://github.com/astral-sh/uv) to export the YOLO model.
+环境要求：具备 Dual-Wide 摄像头的 iPhone、iOS 18+、Xcode 26+（含 Metal Toolchain：`xcodebuild -downloadComponent MetalToolchain`），以及用于导出 YOLO 模型的 [uv](https://github.com/astral-sh/uv)。
 
 ```sh
 git clone <repo> && cd stereo-camera-iphone
-cp Config/Local.xcconfig.example Config/Local.xcconfig   # set your Apple team ID and a unique bundle id
-scripts/export_yolo.sh                                   # downloads and converts YOLO11n-seg
-open StereoVision.xcodeproj                              # Run on your iPhone
+cp Config/Local.xcconfig.example Config/Local.xcconfig   # 填入你的 Apple team ID 和唯一的 bundle id
+scripts/export_yolo.sh                                   # 下载并转换 YOLO11n-seg
+open StereoVision.xcodeproj                              # 在你的 iPhone 上运行
 ```
 
-Without the YOLO model the app still works and falls back to Apple's built-in detectors (people, animals, salient objects). Hold the phone in **landscape**, with the Dynamic Island on the left. On a phone whose lenses sit on a diagonal, either landscape orientation works and the picture stays upright; on iPhone 16 keep the Dynamic Island on the left.
+没有 YOLO 模型也能用，此时会退回到 Apple 自带的检测器（人、动物、显著物体）。把手机**横过来**：iPhone 16 请让灵动岛朝左；对于两颗镜头呈对角排列的机型（如 iPhone 15 Plus），两个横屏方向都可以，画面都会保持正立。
