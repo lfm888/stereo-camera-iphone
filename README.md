@@ -1,5 +1,7 @@
 <p align="center"><img src="docs/logo.png" width="240" alt="StereoVision"></p>
 
+<p align="center"><b><a href="docs/demo.mp4">▶ Watch the demo (MP4, 0.8 MB)</a></b><br><sub>Recorded on an iPhone 15 Plus: live depth, object masks, measurements, bird's-eye and point cloud</sub></p>
+
 # StereoVision
 
 StereoVision turns the two rear cameras of an iPhone (wide + ultra-wide) into a real-time **stereo camera**. It measures how far things are, recognizes and outlines objects (80 everyday classes: people, chairs, bottles, laptops…), and shows the scene in 9 different ways, from a classic depth map to a navigable 3D point cloud.
