@@ -1,6 +1,6 @@
 <p align="center"><img src="docs/logo.png" width="240" alt="StereoVision"></p>
 
-<p align="center"><b><a href="docs/demo.mp4">▶ Watch the demo (MP4, 0.8 MB)</a></b><br><sub>Recorded on an iPhone 15 Plus: live depth, object masks, measurements, bird's-eye and point cloud</sub></p>
+<p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" width="800" alt="StereoVision demo on an iPhone 15 Plus: live depth, object masks, measurements and the point cloud"></a><br><sub>Recorded on an iPhone 15 Plus — click for the 0.8 MB MP4</sub></p>
 
 # StereoVision
 
