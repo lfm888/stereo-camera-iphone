@@ -153,3 +153,53 @@ open StereoVision.xcodeproj                              # 在你的 iPhone 上�
 ```
 
 没有 YOLO 模型也能用，此时会退回到 Apple 自带的检测器（人、动物、显著物体）。把手机**横过来**：iPhone 16 请让灵动岛朝左；对于两颗镜头呈对角排列的机型（如 iPhone 15 Plus），两个横屏方向都可以，画面都会保持正立。
+
+## 实现细节
+
+给想读代码 / 想改算法的人。四段，各对应一个最常被问的问题。
+
+### 标定：不用棋盘格
+
+内参来自系统：`CMSampleBuffer` 的 `kCMSampleBufferAttachmentKey_CameraIntrinsicMatrix` 附件，取不到就退回针孔估计 $f = W/(2\tan(\text{FOV}/2))$、主点在画面中心。外参来自 `AVCaptureDevice.extrinsicMatrix(from:to:)`，得到 $R$（3×3）与 $t$（毫米）。**没有畸变模型**；工作分辨率固定 640×360，内参按 $640/W$ 缩放。
+
+平移 $t$ 全程只用两处：**方向**定滚转角，**长度**定 $fB = f_x\lvert t\rvert/1000$（所以 $Z$ 的单位是米）。
+
+### 极线矫正：只需求一个滚转角
+
+基线躺在像平面内，所以不需要 Bouguet 的双单应。取矫正坐标系
+
+$$e_1=\operatorname{sign}(t_x)\frac{t}{\lVert t\rVert},\quad
+e_2=\operatorname{normalize}(-e_{1y},\,e_{1x},\,0),\quad
+e_3=e_1\times e_2$$
+
+此时 $e_3=(0,0,1)$，$R_{\text{rect}}$ 就是绕光轴的纯滚转，角度即 HUD 里的 $\beta=\operatorname{atan2}(t_y,t_x)$。两个重采样单应（**目标→源**，因为 kernel 是遍历目标像素反向回采样）：
+
+$$H_W^{-1}=K\,R_{\text{rect}}^\top K_r^{-1},\qquad
+H_U^{-1}=K_U\,R^\top R_{\text{rect}}^\top K_r^{-1}\,T_{\Delta y}$$
+
+$T_{\Delta y}$ 是给超广角那一路的垂直平移，用来吃掉残余的极线不齐。深度图最后再用 $M=K_rR_{\text{rect}}K_r^{-1}$ 转回广角坐标系（对角机型因此会丢四角）。
+
+所以 **Calibrate 不是重新标定**：只枚举 `flip`（用 $R$ 还是 $R^\top$，也就是谁当左目）× $\Delta y\in[-12,12]$ px，以整帧 Census 代价最小为判据；$R$、$t$ 始终信出厂值。整套推导的前提是 $t_z\approx 0$——否则 $e_3\ne(0,0,1)$，这里只是一个一致但近似的滚转。
+
+### 视差匹配：传统方法，没有神经网络
+
+Census 7×7 压成 48 bit，汉明距离当代价 → SGM 4 路径聚合（$P_2$ 随图像梯度自适应）→ WTA + uniqueness + 左右一致性 + 抛物线亚像素 → $Z=fB/d$。设置里可切成 5×5 块匹配。YOLO11n-seg 只做分割，**完全不参与视差**。
+
+**为什么能实时**（约 20–22 fps）：640×360 只有 23 万像素；代价是 `popcount` 位运算；代价体积用 `uchar`（14.7 MB 而非 88 MB）；只跑 4 条路径；GPU 上「一个线程组 = 一条扫描线、线程 = 一个视差」，动态规划状态放在片上 `prev[]`、沿扫描线串行推进；整帧一条 command buffer，CPU 不读回。瓶颈是显存带宽（每帧约 300 MB，下限 ≈6 ms），不是算力。
+
+代价同样明确：4 路径 + 8 bit 量化让错误率高于 8 路径 float 版本，所以左右一致性检查是必需品（见上面的精度表）。
+
+深度模型不划算的原因：640×360 上的 4D 代价体积（64 视差 × 32 通道，fp16）就要 943 MB，必须降到 1/4 分辨率；RAFT/IGEV 一类在这个尺寸是几十到上百 GFLOP，手机会掉到 10 fps 以下。而它们的收益集中在无纹理/反光区——那里 1 cm 基线的物理天花板（2 m 处 ±17 cm）早已把精度封顶。
+
+### Metal 是 API，不是芯片
+
+芯片是 SoC 里的 GPU（iPhone 15 Plus 是 A16 的 5 核 GPU，6 GB 统一内存，带宽约 51 GB/s）；**Metal 是苹果的 GPU 编程接口**，MSL 是它的着色器语言，地位等同于 NVIDIA 的 CUDA。iPhone 没有独立显存，GPU 和 CPU 共用同一块内存，所以预算只有每进程的 jetsam 上限（6 GB 机型前台约 2.5–3 GB）——本项目的立体管线在 GPU 侧只占约 90 MB。
+
+最值得借鉴的一段是 `Shaders.metal` 的 `sgmPath`：把方向依赖的动态规划压进线程组，`prev[]`、`simd_min` 归约、三个 barrier 就是全部秘诀。数据布局 `[(y*W+x)*D+d]`（AoS）不要改，否则 coalescing 全毁。
+
+### 不装 Xcode 也能调
+
+`tools/` 里有两个离线工具，配合 App 导出的数据把整条链路拆开看，详见 `tools/README.md`：
+
+- `sgm_ref.py` —— 六个 kernel 的 numpy 逐行孪生实现，`--selftest` 逐元素对拍，精度与上表一致，可导出 4 条路径各自的中间结果
+- `viewer.html` —— 以 **iPhone 上的 App 界面**（外框 / 侧边栏 / HUD / 设置页）回放导出目录，并能把真实画面 `view.png` 半透明叠上来做逐像素对照
