@@ -1,0 +1,1099 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StereoVision 导出回放（手机界面）</title>
+<style>
+  :root{
+    --bg:#07080a; --card:rgba(0,0,0,.55); --fg:#fff; --dim:#9aa3b2;
+    --side:#141416; --accent:#ffd60a; --green:#3ddc6b;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:radial-gradient(120% 120% at 50% 0%,#15181e 0%,#07080a 70%);
+            color:var(--fg);font:13px/1.4 -apple-system,"SF Pro Text","Segoe UI",system-ui,sans-serif;overflow:hidden}
+
+  /* ---------- 外部工具条（不属于手机 UI） ---------- */
+  #tools{position:fixed;top:0;left:0;right:0;height:38px;display:flex;gap:8px;align-items:center;
+         padding:0 12px;background:#0b0d11cc;backdrop-filter:blur(8px);border-bottom:1px solid #1c2027;
+         font-size:12px;color:#8b93a1;z-index:50}
+  #tools b{color:#e8eaee;font-weight:600;font-size:13px}
+  #tools button{background:#1b2029;color:#e8eaee;border:1px solid #262b34;border-radius:7px;padding:4px 9px;
+                font:inherit;cursor:pointer}
+  #tools button:hover{background:#242b36}
+  #tools button.on{background:#2f6fe0;border-color:#2f6fe0;color:#fff}
+  #tools .grow{flex:1}
+  #tools .hint{color:#5f6875}
+
+  /* ---------- 手机舞台 ---------- */
+  #stage{position:fixed;inset:38px 0 0 0;display:flex;align-items:center;justify-content:center}
+  #phone{position:relative;transform-origin:center center;
+         border-radius:56px;padding:9px;
+         background:linear-gradient(150deg,#3a3d43,#0e0f11 35%,#2a2d33 70%,#0b0c0e);
+         box-shadow:0 0 0 1px #000,0 30px 70px -20px #000c,0 2px 0 #ffffff1a inset}
+  #phone.nobezel{padding:0;border-radius:0;background:none;box-shadow:none}
+  #screen{position:relative;display:flex;border-radius:47px;overflow:hidden;background:#000;
+          box-shadow:0 0 0 1.5px #000 inset}
+  #phone.nobezel #screen{border-radius:8px}
+  #island{position:absolute;left:0;top:50%;width:12px;height:96px;transform:translate(-42%,-50%);
+          background:#000;border-radius:8px;z-index:40;pointer-events:none}
+  #phone.nobezel #island{display:none}
+
+  /* ---------- 画面区 ---------- */
+  #view{position:relative;width:870px;height:430px;background:#000;flex:0 0 auto}
+  #cv{position:absolute;inset:0;width:100%;height:100%;display:block}
+
+  /* HUD —— 对应 ContentView.swift:96-126 */
+  #hud{position:absolute;left:8px;top:8px;max-width:330px;padding:6px;border-radius:8px;background:var(--card);
+       color:#fff;font:11px/1.45 ui-monospace,"SF Mono",Consolas,monospace;
+       white-space:pre-wrap;word-break:break-word;pointer-events:none;z-index:10}
+  #hud .title{font:600 15px/1.3 -apple-system,"SF Pro Text","Segoe UI",system-ui,sans-serif;margin-bottom:2px}
+  #hud .warn{color:var(--accent)}
+
+  /* ---------- 右侧竖排按钮 —— 对应 SidePanel ---------- */
+  #side{width:62px;height:430px;background:var(--side);display:flex;flex-direction:column;
+        align-items:center;padding:10px 0;gap:6px;overflow-y:auto;scrollbar-width:none;z-index:5}
+  #side::-webkit-scrollbar{display:none}
+  #side button{width:50px;height:40px;border:0;border-radius:8px;background:transparent;color:#fff;
+               display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
+  #side button:active{background:#ffffff1f}
+  #side button.on{background:#ffffff38;color:var(--accent)}
+  #side button:disabled{opacity:.3;cursor:not-allowed}
+  #side svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;
+            stroke-linecap:round;stroke-linejoin:round}
+  #side .div{width:38px;height:1px;background:#ffffff33;margin:4px 0}
+  #badge{width:50px;height:32px;border-radius:8px;background:#ff9f0a;color:#fff;display:flex;
+         align-items:center;justify-content:center;font:800 10px/1 ui-monospace,Consolas,monospace}
+  #badge.on{cursor:pointer}
+  #badge.view{background:#4da3ff}
+  #rec{color:#ff453a!important}
+
+  /* ---------- 空状态 ---------- */
+  #drop{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;
+        color:#8b93a1;padding:30px;font-size:12px;line-height:1.7;z-index:20;background:#000}
+  #drop.hide{display:none}
+  #drop .big{font-size:16px;color:#e8eaee;margin-bottom:10px;font-weight:600}
+  #drop code{color:#e8eaee;background:#1c2129;padding:1px 5px;border-radius:4px;font-size:11px}
+
+  /* ---------- 设置面板（对应 SettingsView） ---------- */
+  #sheetWrap{position:absolute;inset:0;z-index:30;pointer-events:none}
+  #sheetWrap.open{pointer-events:auto}
+  #dim{position:absolute;inset:0;background:#0008;opacity:0;transition:opacity .25s}
+  #sheetWrap.open #dim{opacity:1}
+  #sheet{position:absolute;left:0;right:0;bottom:0;max-height:88%;overflow-y:auto;
+         background:#1c1c1e;border-radius:14px 14px 0 0;transform:translateY(102%);
+         transition:transform .28s cubic-bezier(.32,.72,0,1);padding:10px 14px 16px}
+  #sheetWrap.open #sheet{transform:translateY(0)}
+  #sheet h3{margin:6px 4px 8px;font:600 16px/1.2 -apple-system,"SF Pro Text",system-ui,sans-serif;text-align:center}
+  #sheet .nav{display:flex;justify-content:space-between;align-items:center;margin-bottom:2px}
+  #sheet .nav button{background:none;border:0;color:#0a84ff;font:600 15px/1 -apple-system,system-ui,sans-serif;cursor:pointer}
+  #sheet section{margin:14px 0 0}
+  #sheet .hdr{color:#8e8e93;font-size:11px;letter-spacing:.04em;text-transform:uppercase;margin:0 4px 6px}
+  #sheet .grp{background:#2c2c2e;border-radius:10px;overflow:hidden}
+  #sheet .row{display:flex;align-items:center;gap:10px;padding:8px 12px;font-size:13px;
+              border-bottom:1px solid #3a3a3c}
+  #sheet .row:last-child{border-bottom:0}
+  #sheet .row .lbl{flex:1}
+  #sheet .row .val{color:#8e8e93;font-variant-numeric:tabular-nums;font-size:12px}
+  #sheet .row input[type=range]{width:130px;accent-color:#0a84ff}
+  #sheet .seg{display:flex;background:#3a3a3c;border-radius:8px;padding:2px;gap:2px}
+  #sheet .seg span{padding:3px 10px;border-radius:6px;font-size:12px;color:#e8eaee;cursor:pointer}
+  #sheet .seg span.on{background:#636366;font-weight:600}
+  #sheet .note{color:#8e8e93;font-size:11px;line-height:1.6;padding:8px 4px 0}
+  #sheet .ro{opacity:.55}
+
+  /* ---------- 提示条 ---------- */
+  #toast{position:absolute;left:50%;bottom:16px;transform:translate(-50%,10px);opacity:0;
+         background:#000c;color:#3ddc6b;padding:6px 12px;border-radius:8px;font-size:12px;
+         transition:.25s;pointer-events:none;z-index:35;white-space:nowrap}
+  #toast.show{opacity:1;transform:translate(-50%,0)}
+</style>
+</head>
+<body>
+
+<div id="tools">
+  <b>StereoVision 回放</b>
+  <input type="file" id="pick" multiple webkitdirectory style="display:none">
+  <button id="open">打开导出目录…</button>
+  <button id="cmp" title="把 App 真实画面 view.png 半透明叠上来做逐像素对照">对比 view.png</button>
+  <button id="bez" class="on" title="显示/隐藏 iPhone 外框">手机外框</button>
+  <span class="grow"></span>
+  <span class="hint" id="info">把导出目录拖进窗口，或点「打开导出目录…」</span>
+</div>
+
+<div id="stage">
+  <div id="phone">
+    <div id="screen">
+      <div id="island"></div>
+      <div id="view">
+        <canvas id="cv"></canvas>
+        <div id="hud"><div class="title">Standard</div></div>
+        <div id="drop">
+          <div>
+            <div class="big">没有数据</div>
+            把 App 导出的目录拖进来<br>
+            <span style="font-size:11px">文件 › 我的 iPhone › StereoVision › 时间戳目录</span><br><br>
+            需要 <code>depth_mm.png</code> · <code>rgb.png</code> · <code>meta.json</code><br>
+            可选 <code>view.png</code>（真实画面）· <code>pair.png</code>（Rectified pair 截图）
+          </div>
+        </div>
+        <div id="toast"></div>
+      </div>
+      <div id="side"></div>
+      <div id="sheetWrap">
+        <div id="dim"></div>
+        <div id="sheet"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* ===========================================================================
+   StereoVision 导出回放 —— 以 iPhone 上的 App 界面呈现
+   ---------------------------------------------------------------------------
+   复刻对象：
+     ContentView.swift:105-126  HUD（左上角信息卡）
+     ContentView.swift:128-172  SidePanel（右侧 62pt 竖排按钮）
+     ContentView.swift:174-237  SettingsView（设置页）
+     Shaders.metal:300-352      displayFragment 的 9 个视图模式
+     Shaders.metal:354-375      点云
+     Analyzer.swift:87-165      3D 分割 / 俯视扫描线
+     OverlayView.swift:66-101   俯视图
+
+   ★ depth_mm.png 是 16 位灰度 PNG，浏览器 <img> 只给 8 位，所以自带一个
+     最小 PNG 解码器（DecompressionStream 解 zlib），把毫米原样读出来。
+   =========================================================================== */
+
+// ---------------------------------------------------------------- 1. PNG 解码
+async function inflateZlib(bytes) {
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+/** 最小 PNG 解码器：bitDepth 8/16，colorType 0/2/4/6，非隔行 */
+async function decodePNG(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  const sig = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  for (let i = 0; i < 8; i++) if (buf[i] !== sig[i]) throw new Error("不是 PNG");
+  const dv = new DataView(buf.buffer);
+  let p = 8, w = 0, h = 0, bitDepth = 0, colorType = 0, interlace = 0;
+  const idat = [];
+  while (p < buf.length) {
+    const len = dv.getUint32(p);
+    const type = String.fromCharCode(buf[p + 4], buf[p + 5], buf[p + 6], buf[p + 7]);
+    const data = buf.subarray(p + 8, p + 8 + len);
+    if (type === "IHDR") {
+      w = dv.getUint32(p + 8); h = dv.getUint32(p + 12);
+      bitDepth = data[8]; colorType = data[9]; interlace = data[12];
+    } else if (type === "IDAT") idat.push(data);
+    else if (type === "IEND") break;
+    p += 12 + len;
+  }
+  if (interlace) throw new Error("不支持隔行 PNG");
+  const channels = { 0: 1, 2: 3, 4: 2, 6: 4 }[colorType];
+  if (!channels) throw new Error("不支持的 colorType " + colorType);
+  const bpp = Math.max(1, (channels * bitDepth) >> 3);
+  const stride = Math.ceil(w * channels * bitDepth / 8);
+
+  const total = idat.reduce((a, b) => a + b.length, 0);
+  const packed = new Uint8Array(total);
+  let o = 0; for (const c of idat) { packed.set(c, o); o += c.length; }
+  const raw = await inflateZlib(packed);
+
+  const out = new Uint8Array(stride * h);
+  for (let y = 0; y < h; y++) {
+    const ft = raw[y * (stride + 1)];
+    const src = raw.subarray(y * (stride + 1) + 1, y * (stride + 1) + 1 + stride);
+    const dst = out.subarray(y * stride, (y + 1) * stride);
+    const prev = y > 0 ? out.subarray((y - 1) * stride, y * stride) : null;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= bpp ? dst[x - bpp] : 0;
+      const b = prev ? prev[x] : 0;
+      const c = (prev && x >= bpp) ? prev[x - bpp] : 0;
+      let v = src[x];
+      switch (ft) {
+        case 0: break;
+        case 1: v += a; break;
+        case 2: v += b; break;
+        case 3: v += (a + b) >> 1; break;
+        case 4: {
+          const pp = a + b - c, pa = Math.abs(pp - a), pb = Math.abs(pp - b), pc = Math.abs(pp - c);
+          v += (pa <= pb && pa <= pc) ? a : (pb <= pc ? b : c); break;
+        }
+        default: throw new Error("未知滤波类型 " + ft);
+      }
+      dst[x] = v & 0xff;
+    }
+  }
+  return { w, h, channels, bitDepth, stride, data: out };
+}
+
+// ---------------------------------------------------------------- 2. 状态
+const VIEW_W = 870, VIEW_H = 430, SIDE_W = 62;   // 逻辑尺寸（横屏 iPhone 15 Plus 比例）
+const S = {
+  dw: 0, dh: 0, depth: null,
+  rgb: null, rw: 0, rh: 0, rch: 1,
+  view: null, pair: null,
+  K: { fx: 470, fy: 470, cx: 320, cy: 180 },
+  meta: null,
+  minZ: 0.12, maxZ: 3, alpha: 0.55,
+  pstep: 2, psize: 2,
+  mode: 0, compare: false, detection: true, showMasks: true,
+  grid: null,
+  orbit: { yaw: -0.45, pitch: 0.3, zoom: 1, pivot: 0 },
+  probe: null, k: 1,
+};
+
+const MODES = ["Standard", "Depth map", "Overlay", "Disparity", "Rectified pair",
+               "Anaglyph", "3D segmentation", "Bird's-eye", "Point cloud"];
+const ICONS = [
+  // 0 camera
+  '<svg viewBox="0 0 16 16"><path d="M1.5 5.5h3l1-2h5l1 2h3v8h-13z"/><circle cx="8" cy="9.2" r="2.6"/></svg>',
+  // 1 depth
+  '<svg viewBox="0 0 16 16"><path d="M8 1.8c2.2 2.8 4 4.2 4 6.7a4 4 0 0 1-8 0c0-1.2.6-2.2 1.7-3.2.4 1 .9 1.6 1.8 2.1.3-2 .2-3.9.5-5.6z"/></svg>',
+  // 2 overlay / layers
+  '<svg viewBox="0 0 16 16"><path d="M8 2.2 2.2 5.1 8 8l5.8-2.9z"/><path d="M2.2 8 8 10.9 13.8 8"/><path d="M2.2 10.9 8 13.8l5.8-2.9"/></svg>',
+  // 3 disparity
+  '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 2a6 6 0 0 1 0 12z" fill="currentColor" stroke="none"/></svg>',
+  // 4 rectified pair
+  '<svg viewBox="0 0 16 16"><rect x="1.6" y="3.4" width="12.8" height="9.2" rx="1.4"/><path d="M8 3.4v9.2"/></svg>',
+  // 5 anaglyph / glasses
+  '<svg viewBox="0 0 16 16"><circle cx="5" cy="9.2" r="2.6"/><circle cx="11" cy="9.2" r="2.6"/><path d="M7.6 9.2h.8M2.4 7.6 4.6 6.2M13.6 7.6 11.4 6.2"/></svg>',
+  // 6 grid
+  '<svg viewBox="0 0 16 16"><rect x="2" y="2" width="12" height="12" rx="1.4"/><path d="M6 2v12M10 2v12M2 6h12M2 10h12"/></svg>',
+  // 7 scope
+  '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.8"/><path d="M8 2.2v2.6M8 11.2v2.6M2.2 8h2.6M11.2 8h2.6"/></svg>',
+  // 8 cube
+  '<svg viewBox="0 0 16 16"><path d="M8 1.6 14 5v6l-6 3.4L2 11V5z"/><path d="M2 5l6 3.4L14 5M8 8.4v6"/></svg>',
+];
+
+// ---------------------------------------------------------------- 3. 工具
+const clamp01 = v => v < 0 ? 0 : v > 1 ? 1 : v;
+const sat = clamp01;
+const fract = v => v - Math.floor(v);
+const mix = (a, b, t) => a + (b - a) * t;
+const LUMA = [0.299, 0.587, 0.114];
+
+/** Shaders.metal:264-282 */
+function turbo(x) {
+  x = sat(x);
+  const x2 = x * x, x3 = x2 * x, x4 = x2 * x2;
+  const p4 = (a, b, c, d) => a + b * x + c * x2 + d * x3;
+  const p2 = (a, b) => a + b * x;
+  return [
+    sat(p4(0.13572138, 4.61539260, -42.66032258, 132.13108234) + p2(-152.94239396, 59.28637943) * x4),
+    sat(p4(0.09140261, 2.19418839, 4.84296658, -14.18503333) + p2(4.27729857, 2.82956604) * x4),
+    sat(p4(0.10667330, 12.64194608, -60.58204836, 110.36276771) + p2(-89.90310912, 27.34824973) * x4),
+  ];
+}
+
+/** Shaders.metal:283-288 */
+function palette(id) {
+  const h = fract(id * 0.61803398875);
+  return [fract(h + 1), fract(h + 2 / 3), fract(h + 1 / 3)]
+    .map(v => sat(Math.abs(v * 6 - 3) - 1)).map(v => 1 + (v - 1) * 0.8);
+}
+
+/** 双线性采样彩色图（displayFragment 的 sampler lin） */
+function sampleRGB(u, v) {
+  if (!S.rgb) return [0.5, 0.5, 0.5];
+  const x = clamp01(u) * (S.rw - 1), y = clamp01(v) * (S.rh - 1);
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const x1 = Math.min(S.rw - 1, x0 + 1), y1 = Math.min(S.rh - 1, y0 + 1);
+  const fx = x - x0, fy = y - y0, ch = S.rch;
+  const g = (xx, yy, c) => S.rgb[(yy * S.rw + xx) * ch + c];
+  const out = [0, 0, 0];
+  for (let c = 0; c < 3; c++) {
+    out[c] = mix(mix(g(x0, y0, c), g(x1, y0, c), fx), mix(g(x0, y1, c), g(x1, y1, c), fx), fy);
+  }
+  return out;
+}
+
+/** StereoFrame.sample(rect:q:) —— App 的准星 / 点选测距 */
+function sampleRect(rx, ry, rw, rh, q) {
+  const x0 = Math.max(0, Math.floor(rx * S.dw)), x1 = Math.min(S.dw, Math.ceil((rx + rw) * S.dw));
+  const y0 = Math.max(0, Math.floor(ry * S.dh)), y1 = Math.min(S.dh, Math.ceil((ry + rh) * S.dh));
+  const step = Math.max(1, Math.floor(Math.sqrt((x1 - x0) * (y1 - y0) / 400)));
+  const v = [];
+  for (let y = y0; y < y1; y += step)
+    for (let x = x0; x < x1; x += step) { const z = S.depth[y * S.dw + x]; if (z > 0) v.push(z); }
+  if (v.length < 6) return null;
+  v.sort((a, b) => a - b);
+  return v[Math.floor((v.length - 1) * q)];
+}
+
+// ---------------------------------------------------------------- 4. 分割 + 扫描线
+/** Analyzer.swift:87-165 */
+function computeGrid() {
+  const step = Math.max(1, Math.floor(S.dw / 160));
+  const gw = Math.floor(S.dw / step), gh = Math.floor(S.dh / step);
+  const n = gw * gh;
+  const g = new Float32Array(n);
+  for (let gy = 0; gy < gh; gy++) {
+    for (let gx = 0; gx < gw; gx++) {
+      let s = 0, c = 0;
+      for (let yy = 0; yy < step; yy++) {
+        const row = (gy * step + yy) * S.dw;
+        for (let xx = 0; xx < step; xx++) {
+          const v = S.depth[row + gx * step + xx];
+          if (v > 0) { s += v; c++; }
+        }
+      }
+      if (c * 2 >= step * step) g[gy * gw + gx] = s / c;
+    }
+  }
+  const scan = new Float32Array(gw);
+  for (let gx = 0; gx < gw; gx++) {
+    let m = Infinity;
+    for (let gy = Math.floor(gh * 3 / 10); gy < Math.floor(gh * 7 / 10); gy++) {
+      const v = g[gy * gw + gx];
+      if (v > 0 && v < m) m = v;
+    }
+    scan[gx] = isFinite(m) ? m : 0;
+  }
+  const lab = new Int32Array(n), comps = [], stack = [];
+  let cid = 0;
+  for (let i = 0; i < n; i++) {
+    if (!(g[i] > 0) || lab[i] !== 0) continue;
+    cid++; lab[i] = cid; stack.push(i);
+    const c = { id: cid, count: 0, sumZ: 0, sumX: 0, x0: 1e9, y0: 1e9, x1: 0, y1: 0 };
+    while (stack.length) {
+      const p = stack.pop();
+      const z = g[p], px = p % gw, py = (p / gw) | 0;
+      c.count++; c.sumZ += z; c.sumX += px;
+      if (px < c.x0) c.x0 = px; if (px > c.x1) c.x1 = px;
+      if (py < c.y0) c.y0 = py; if (py > c.y1) c.y1 = py;
+      const tol = 0.02 + 0.04 * z;
+      const nb = [[p - 1, px > 0], [p + 1, px < gw - 1], [p - gw, py > 0], [p + gw, py < gh - 1]];
+      for (const [q2, ok] of nb) {
+        if (ok && lab[q2] === 0 && g[q2] > 0 && Math.abs(g[q2] - z) < tol) { lab[q2] = cid; stack.push(q2); }
+      }
+    }
+    comps.push(c);
+  }
+  const kept = comps.filter(c => c.count >= 40).sort((a, b) => b.count - a.count).slice(0, 24);
+  const remap = new Map(), blobs = [];
+  kept.forEach((c, k) => {
+    const id = k + 1;
+    remap.set(c.id, id);
+    const z = c.sumZ / c.count;
+    const u = (c.sumX / c.count + 0.5) * step;
+    blobs.push({
+      id,
+      rect: [c.x0 / gw, c.y0 / gh, (c.x1 - c.x0 + 1) / gw, (c.y1 - c.y0 + 1) / gh],
+      distance: z,
+      x: (u - S.K.cx) * z / S.K.fx,
+      width: (c.x1 - c.x0 + 1) * step * z / S.K.fx,
+      cells: c.count,
+    });
+  });
+  const labels = new Uint8Array(n);
+  for (let i = 0; i < n; i++) labels[i] = remap.get(lab[i]) ?? 0;
+  S.grid = { gw, gh, step, g, scan, labels, blobs };
+}
+
+// ---------------------------------------------------------------- 5. 逐像素着色
+/** Shaders.metal:300-352 的 case 0..3 / 6 */
+function shade(mode) {
+  const { dw, dh, depth } = S;
+  const img = new ImageData(dw, dh);
+  const px = img.data;
+  const { minZ, maxZ, alpha } = S;
+  const labels = (mode === 6 && S.grid) ? S.grid.labels : null;
+  for (let y = 0; y < dh; y++) {
+    const v = (y + 0.5) / dh;
+    for (let x = 0; x < dw; x++) {
+      const u = (x + 0.5) / dw;
+      const c = sampleRGB(u, v);
+      const z = depth[y * dw + x];
+      const valid = z > 0;
+      let r, g, b;
+      if (mode === 0) {
+        r = c[0]; g = c[1]; b = c[2];
+      } else if (mode === 1) {
+        if (valid) { const t = turbo(1 - sat((z - minZ) / (maxZ - minZ))); r = t[0]; g = t[1]; b = t[2]; }
+        else r = g = b = 0;
+      } else if (mode === 2) {
+        if (valid) {
+          const t = turbo(1 - sat((z - minZ) / (maxZ - minZ)));
+          r = mix(c[0], t[0], alpha); g = mix(c[1], t[1], alpha); b = mix(c[2], t[2], alpha);
+        } else { r = c[0] * 0.7; g = c[1] * 0.7; b = c[2] * 0.7; }
+      } else if (mode === 3) {
+        const grey = valid ? sat((1 / z - 1 / maxZ) / (1 / minZ - 1 / maxZ)) : 0;
+        r = g = b = grey;
+      } else {
+        const grey = c[0] * LUMA[0] + c[1] * LUMA[1] + c[2] * LUMA[2];
+        let id = 0;
+        if (labels) {
+          const gx = Math.min(S.grid.gw - 1, Math.floor(u * S.grid.gw));
+          const gy = Math.min(S.grid.gh - 1, Math.floor(v * S.grid.gh));
+          id = labels[gy * S.grid.gw + gx];
+        }
+        if (id === 0) r = g = b = grey * 0.4;
+        else {
+          const p = palette(id);
+          r = mix(grey, p[0], 0.6); g = mix(grey, p[1], 0.6); b = mix(grey, p[2], 0.6);
+        }
+      }
+      const i = (y * dw + x) * 4;
+      px[i] = r * 255; px[i + 1] = g * 255; px[i + 2] = b * 255; px[i + 3] = 255;
+    }
+  }
+  return img;
+}
+
+// ---------------------------------------------------------------- 6. 画布
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const off = document.createElement("canvas");
+const octx = off.getContext("2d");
+let fit = { x: 0, y: 0, w: 1, h: 1 };
+
+function layout() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const r = cv.getBoundingClientRect();          // 已含外框缩放
+  S.k = r.width / VIEW_W;
+  cv.width = Math.max(1, Math.round(r.width * dpr));
+  cv.height = Math.max(1, Math.round(r.height * dpr));
+  ctx.setTransform(S.k * dpr, 0, 0, S.k * dpr, 0, 0);
+  const ar = (S.dw && S.dh) ? S.dw / S.dh : 16 / 9;
+  let w = VIEW_W, h = VIEW_W / ar;
+  if (h > VIEW_H) { h = VIEW_H; w = VIEW_H * ar; }
+  fit = { x: (VIEW_W - w) / 2, y: (VIEW_H - h) / 2, w, h };
+}
+
+function render() {
+  layout();
+  ctx.clearRect(0, 0, VIEW_W, VIEW_H);
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  if (!S.depth) { updateHud(); return; }
+
+  if (S.mode <= 3 || S.mode === 6) {
+    off.width = S.dw; off.height = S.dh;
+    octx.putImageData(shade(S.mode), 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(off, fit.x, fit.y, fit.w, fit.h);
+  } else if (S.mode === 4) renderPair();
+  else if (S.mode === 5) renderAnaglyph();
+  else if (S.mode === 7) renderRadar();
+  else if (S.mode === 8) renderCloud();
+
+  drawOverlays();
+  if (S.compare && S.view) {
+    ctx.globalAlpha = 0.5;
+    ctx.drawImage(S.view, fit.x, fit.y, fit.w, fit.h);
+    ctx.globalAlpha = 1;
+  }
+  updateHud();
+}
+
+// ---------------------------------------------------------------- 7. 叠加层
+function pill(text, x, y, bg, fg = "#fff", small = false) {
+  const fs = small ? 10 : 12;
+  ctx.font = `600 ${fs}px -apple-system,"SF Pro Text",system-ui,sans-serif`;
+  const w = ctx.measureText(text).width + 10, h = fs + 7;
+  ctx.fillStyle = bg;
+  roundRect(x, y - h - 3, w, h, 4); ctx.fill();
+  ctx.fillStyle = fg;
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.fillText(text, x + 5, y - h + 3);
+}
+
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+/** OverlayView.swift:28-63 + :87-101 */
+function drawOverlays() {
+  if (!S.depth) return;
+  if (S.mode === 4 || S.mode === 5 || S.mode === 7 || S.mode === 8) return;
+  const { x, y, w, h } = fit;
+
+  if (S.mode === 6) {
+    if (S.grid) for (const b of S.grid.blobs) {
+      if (b.cells < 80) continue;
+      const [bx, by, bw, bh] = b.rect;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeStyle = "rgba(255,255,255,.7)"; ctx.lineWidth = 1;
+      ctx.strokeRect(x + bx * w, y + by * h, bw * w, bh * h);
+      ctx.setLineDash([]);
+      pill(`S${b.id} · ${b.distance.toFixed(2)} m · ⌀${Math.round(b.width * 100)} cm`,
+        x + bx * w, Math.max(y + by * h, y + 18), "rgba(0,0,0,.65)", "#fff", true);
+    }
+  } else if (S.detection && S.meta) {
+    for (const o of (S.meta.objects || [])) {
+      const [bx, by, bw, bh] = o.bbox_norm || [0, 0, 0, 0];
+      const rx = x + bx * w, ry = y + by * h, rw = bw * w, rh = bh * h;
+      ctx.strokeStyle = "#3ddc6b"; ctx.lineWidth = 2.5;
+      roundRect(rx, ry, rw, rh, 4); ctx.stroke();
+      const dist = (o.distance_m != null) ? ` · ${o.distance_m.toFixed(2)} m` : "";
+      pill(`#${o.id} ${o.label} ${Math.round((o.confidence || 0) * 100)}%${dist}`,
+        rx, Math.max(ry, y + 18), "#2b8f52");
+      if (o.distance_m != null) {
+        pill(`${Math.round(o.width_m * 100)}×${Math.round(o.height_m * 100)} cm · X ${o.x_m >= 0 ? "+" : ""}${o.x_m.toFixed(2)} m`,
+          rx + 2, ry + rh, "rgba(0,0,0,.6)", "#fff", true);
+      }
+    }
+  }
+
+  // 准星（画面中心 5%×9%，q=0.5）
+  const cz = sampleRect(0.475, 0.455, 0.05, 0.09, 0.5);
+  const ccx = x + w / 2, ccy = y + h / 2;
+  ctx.strokeStyle = "rgba(255,255,255,.85)"; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(ccx - 12, ccy); ctx.lineTo(ccx + 12, ccy);
+  ctx.moveTo(ccx, ccy - 12); ctx.lineTo(ccx, ccy + 12);
+  ctx.stroke();
+  pill(cz != null ? `${cz.toFixed(2)} m` : "— m", ccx + 14, ccy - 4, "rgba(0,0,0,.6)", "#fff", true);
+
+  if (S.probe) {
+    const px = x + S.probe.u * w, py = y + S.probe.v * h;
+    ctx.strokeStyle = "#ffd60a"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(px, py, 9, 0, Math.PI * 2); ctx.stroke();
+    pill(S.probe.text, px + 12, py, "rgba(255,214,10,.92)", "#000");
+  }
+}
+
+/** Shaders.metal:322-333 case 4 */
+function renderPair() {
+  const { x, y, w, h } = fit;
+  ctx.fillStyle = "#0a0a0c"; ctx.fillRect(x, y, w, h);
+  if (!S.pair) {
+    ctx.fillStyle = "#8b93a1";
+    ctx.font = '12px -apple-system,"SF Pro Text",system-ui,sans-serif';
+    ctx.textAlign = "center";
+    ctx.fillText("把 Rectified pair 截图存成 pair.png 放进导出目录", x + w / 2, y + h / 2 - 8);
+    ctx.fillText("（这个模式需要左右两幅图，导出数据里没有）", x + w / 2, y + h / 2 + 12);
+    ctx.textAlign = "left";
+    return;
+  }
+  const by = y + h * 0.25, bh = h * 0.5;
+  const half = S.pair.width / 2;
+  const ar = half / S.pair.height;
+  let dw = w / 2, dh = dw / ar;
+  if (dh > bh) { dh = bh; dw = dh * ar; }
+  const sx = x + (w - dw * 2) / 2;
+  ctx.drawImage(S.pair, 0, 0, half, S.pair.height, sx, by + (bh - dh) / 2, dw, dh);
+  ctx.drawImage(S.pair, half, 0, half, S.pair.height, sx + dw, by + (bh - dh) / 2, dw, dh);
+  ctx.strokeStyle = "rgba(26,255,90,.85)"; ctx.lineWidth = 1;
+  for (let i = 1; i < 12; i++) {
+    const yy = by + (bh - dh) / 2 + dh * i / 12;
+    ctx.beginPath(); ctx.moveTo(sx, yy); ctx.lineTo(sx + dw * 2, yy); ctx.stroke();
+  }
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(x + w / 2, by + (bh - dh) / 2); ctx.lineTo(x + w / 2, by + (bh - dh) / 2 + dh); ctx.stroke();
+}
+
+/** Shaders.metal:334-339 case 5 */
+function renderAnaglyph() {
+  if (!S.pair) return renderPair();
+  const { x, y, w, h } = fit;
+  const half = S.pair.width / 2;
+  const tmp = document.createElement("canvas");
+  tmp.width = S.pair.width; tmp.height = S.pair.height;
+  const tctx = tmp.getContext("2d");
+  tctx.drawImage(S.pair, 0, 0);
+  const ld = tctx.getImageData(0, 0, half, S.pair.height).data;
+  const rd = tctx.getImageData(half, 0, half, S.pair.height).data;
+  off.width = S.dw; off.height = S.dh;
+  const img = new ImageData(S.dw, S.dh), px = img.data;
+  const pw = half, ph = S.pair.height;
+  for (let yy = 0; yy < S.dh; yy++) {
+    for (let xx = 0; xx < S.dw; xx++) {
+      const px2 = Math.min(pw - 1, Math.floor(xx / S.dw * pw));
+      const py2 = Math.min(ph - 1, Math.floor(yy / S.dh * ph));
+      const i = (py2 * pw + px2) * 4;
+      const l = ld[i] * LUMA[0] + ld[i + 1] * LUMA[1] + ld[i + 2] * LUMA[2];
+      const r = rd[i] * LUMA[0] + rd[i + 1] * LUMA[1] + rd[i + 2] * LUMA[2];
+      const o = (yy * S.dw + xx) * 4;
+      px[o] = l; px[o + 1] = r; px[o + 2] = r; px[o + 3] = 255;
+    }
+  }
+  octx.putImageData(img, 0, 0);
+  ctx.drawImage(off, x, y, w, h);
+}
+
+/** OverlayView.swift:66-101 radar() */
+function renderRadar() {
+  const { x, y, w, h } = fit;
+  ctx.fillStyle = "#000"; ctx.fillRect(x, y, w, h);
+  const grid = S.grid || (computeGrid(), S.grid);
+  const maxZ = S.maxZ;
+  const ox = x + w / 2, oy = y + h - 14;
+  const s = (h - 34) / maxZ;
+  const half = Math.atan((S.dw / 2) / S.K.fx);
+
+  ctx.beginPath();
+  ctx.moveTo(ox - Math.sin(half) * maxZ * s / Math.cos(half), oy - maxZ * s);
+  ctx.lineTo(ox, oy);
+  ctx.lineTo(ox + Math.sin(half) * maxZ * s / Math.cos(half), oy - maxZ * s);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(255,255,255,.05)"; ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,.35)"; ctx.lineWidth = 1; ctx.stroke();
+
+  const ringStep = maxZ > 4 ? 1 : 0.5;
+  ctx.save();
+  ctx.font = '9px ui-monospace,"SF Mono",Consolas,monospace';
+  ctx.textBaseline = "alphabetic";
+  ctx.textAlign = "left";
+  for (let r = ringStep; r <= maxZ + 1e-6; r += ringStep) {
+    const rr = r * s;
+    ctx.beginPath(); ctx.arc(ox, oy, rr, Math.PI, 0, true);
+    ctx.strokeStyle = "rgba(255,255,255,.18)"; ctx.stroke();
+    ctx.fillStyle = "rgba(255,255,255,.6)";
+    ctx.fillText(`${r.toFixed(1)} m`, ox + 4, oy - rr + 2);
+  }
+  ctx.restore();
+
+  const n = grid.scan.length;
+  for (let i = 0; i < n; i++) {
+    const z = grid.scan[i];
+    if (!(z > 0)) continue;
+    const u = (i + 0.5) / n * S.dw;
+    const X = (u - S.K.cx) * z / S.K.fx;
+    const t = clamp01((z - S.minZ) / (S.maxZ - S.minZ));
+    ctx.fillStyle = `hsl(${Math.round(0.66 * t * 360)},90%,58%)`;
+    ctx.beginPath(); ctx.arc(ox + X * s, oy - z * s, 2, 0, Math.PI * 2); ctx.fill();
+  }
+
+  for (const b of grid.blobs) {
+    if (b.cells < 80) continue;
+    const px = ox + b.x * s, py = oy - b.distance * s;
+    const hw = Math.max(3, b.width * s / 2);
+    ctx.strokeStyle = "rgba(255,255,255,.5)"; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(px - hw, py - 2); ctx.lineTo(px + hw, py - 2);
+    ctx.moveTo(px - hw, py + 2); ctx.lineTo(px + hw, py + 2);
+    ctx.stroke();
+  }
+
+  if (S.detection && S.meta) for (const o of (S.meta.objects || [])) {
+    if (o.distance_m == null) continue;
+    const px = ox + o.x_m * s, py = oy - o.distance_m * s;
+    const r = Math.max(6, o.width_m * s / 2);
+    ctx.fillStyle = "rgba(61,220,107,.35)";
+    ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = "#3ddc6b"; ctx.lineWidth = 2; ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.save();
+    ctx.font = '10px -apple-system,"SF Pro Text",system-ui,sans-serif';
+    ctx.textBaseline = "alphabetic";
+    ctx.fillText(`${o.label} ${o.distance_m.toFixed(2)} m`, px + r + 2, py + 4);
+    ctx.restore();
+  }
+
+  ctx.fillStyle = "#ffd60a";
+  ctx.beginPath();
+  ctx.moveTo(ox - 8, oy + 6); ctx.lineTo(ox, oy - 6); ctx.lineTo(ox + 8, oy + 6);
+  ctx.closePath(); ctx.fill();
+}
+
+/** Shaders.metal:354-375 pointVertex */
+function renderCloud() {
+  const { x, y, w, h } = fit;
+  ctx.fillStyle = "#05070a"; ctx.fillRect(x, y, w, h);
+
+  let cz = S.orbit.pivot;
+  if (!cz) {
+    const v = [];
+    for (let i = 0; i < S.depth.length; i += 7) if (S.depth[i] > 0) v.push(S.depth[i]);
+    v.sort((a, b) => a - b);
+    cz = v.length ? v[v.length >> 1] : 1.5;
+    S.orbit.pivot = cz;
+  }
+
+  const step = S.pstep;
+  const gw = Math.floor(S.dw / step), gh = Math.floor(S.dh / step);
+  const { yaw, pitch, zoom } = S.orbit;
+  const cyw = Math.cos(yaw), syw = Math.sin(yaw);
+  const cp = Math.cos(pitch), sp = Math.sin(pitch);
+  const dist = 1.9 * cz / zoom;
+  const f = Math.min(w, h) * 1.1;
+  const ccx = x + w / 2, ccy = y + h / 2;
+  const pts = [];
+  for (let gy = 0; gy < gh; gy++) {
+    for (let gx = 0; gx < gw; gx++) {
+      const px = gx * step, py = gy * step;
+      const z = S.depth[py * S.dw + px];
+      if (!(z > 0)) continue;
+      const X = (px + 0.5 - S.K.cx) * z / S.K.fx;
+      const Y = -(py + 0.5 - S.K.cy) * z / S.K.fy;
+      const Z = z - cz;
+      const x1 = X * cyw + Z * syw, z1 = -X * syw + Z * cyw;
+      const y2 = Y * cp - z1 * sp, z2 = Y * sp + z1 * cp;
+      const zc = z2 + dist;
+      if (zc <= 0.02) continue;
+      const sx = ccx + f * x1 / zc, sy = ccy - f * y2 / zc;
+      if (sx < x - 4 || sx > x + w + 4 || sy < y - 4 || sy > y + h + 4) continue;
+      const c = sampleRGB(px / S.dw, py / S.dh);
+      pts.push([zc, sx, sy, c[0], c[1], c[2]]);
+    }
+  }
+  pts.sort((a, b) => b[0] - a[0]);
+  const r = Math.max(1, S.psize);
+  const cache = new Map();
+  for (const [, sx, sy, cr, cg, cb] of pts) {
+    const key = (((cr * 31) | 0) << 10) | (((cg * 31) | 0) << 5) | ((cb * 31) | 0);
+    let col = cache.get(key);
+    if (col === undefined) {
+      col = `rgb(${(cr * 255) | 0},${(cg * 255) | 0},${(cb * 255) | 0})`;
+      cache.set(key, col);
+    }
+    ctx.fillStyle = col;
+    ctx.fillRect(sx - r / 2, sy - r / 2, r, r);
+  }
+  ctx.fillStyle = "rgba(255,255,255,.55)";
+  ctx.font = '10px -apple-system,"SF Pro Text",system-ui,sans-serif';
+  ctx.textBaseline = "top";
+  ctx.fillText(`拖动旋转 · 双指/滚轮缩放 · 点击复位 · ${pts.length} 点`, x + 8, y + 8);
+}
+
+// ---------------------------------------------------------------- 8. HUD
+function updateHud() {
+  const hud = document.getElementById("hud");
+  const m = S.meta || {};
+  const rect = m.rectification || {};
+  const lines = [];
+  lines.push(`<div class="title">${MODES[S.mode]}</div>`);
+  if (!S.depth) { hud.innerHTML = lines.join(""); return; }
+  let valid = 0;
+  for (let i = 0; i < S.depth.length; i += 5) if (S.depth[i] > 0) valid++;
+  const pct = Math.round(100 * valid / Math.ceil(S.depth.length / 5));
+  lines.push(`${S.dw}×${S.dh} · 有效 ${pct}% · 回放`);
+  const B = m.baseline_mm, beta = rect.baseline_angle_deg, fx = S.K.fx;
+  if (B != null || beta != null) {
+    lines.push(`B ${B != null ? B.toFixed(1) : "—"} mm · β ${beta != null ? (beta >= 0 ? "+" : "") + beta.toFixed(0) : "—"}° · f ${fx.toFixed(0)} px`);
+  }
+  const dy = rect.dy_px, flip = rect.flip;
+  if (dy != null || m.matcher) {
+    const alg = m.matcher === "sgm"
+      ? `SGM-4 · D ${m.max_disparity ?? "—"}${m.lr_check ? " · LR" : ""}`
+      : m.matcher === "block" ? `Block · D ${m.max_disparity ?? "—"}` : "";
+    lines.push(`Δy ${dy != null ? dy.toFixed(2) : "—"} px${flip ? " · ⇄" : ""}${alg ? " · " + alg : ""}`);
+  }
+  if (rect.camera_extrinsics === false) {
+    lines.push(`<span class="warn">No lens extrinsics: assuming a side-by-side pair</span>`);
+  }
+  if (m.source) {
+    const src = String(m.source);
+    lines.push(`来源 ${src.length > 34 ? src.slice(0, 34) + "…" : src}`);
+  }
+  hud.innerHTML = lines.join("<br>");
+}
+
+// ---------------------------------------------------------------- 9. 侧边栏
+const sideEl = document.getElementById("side");
+MODES.forEach((name, i) => {
+  const b = document.createElement("button");
+  b.innerHTML = ICONS[i];
+  b.title = name;
+  b.setAttribute("aria-label", name);
+  b.onclick = () => setMode(i);
+  sideEl.appendChild(b);
+});
+sideEl.insertAdjacentHTML("beforeend", '<div class="div"></div>');
+
+const badge = document.createElement("div");
+badge.id = "badge";
+badge.textContent = "SGM";
+badge.title = "深度来源（回放时固定为导出的那一次）";
+sideEl.appendChild(badge);
+
+function sideBtn(icon, label, fn, cls) {
+  const b = document.createElement("button");
+  b.innerHTML = `<svg viewBox="0 0 16 16">${icon}</svg>`;
+  b.title = label;
+  b.setAttribute("aria-label", label);
+  if (cls) b.className = cls;
+  b.onclick = fn;
+  sideEl.appendChild(b);
+  return b;
+}
+
+const detBtn = sideBtn(
+  '<path d="M1.6 5.4V2.4h3M14.4 5.4V2.4h-3M1.6 10.6v3h3M14.4 10.6v3h-3"/><circle cx="8" cy="8" r="2.2"/>',
+  "Detection", () => { S.detection = !S.detection; detBtn.classList.toggle("on", S.detection); render(); });
+detBtn.classList.add("on");
+
+sideBtn('<path d="M8 1.8 2.6 8.4h3.2L6.4 14.2 13.4 6.6H9.8z"/>', "Calibrate（真机功能）",
+  () => toast("标定需要在真机上跑：查看器不重算极线"), null).disabled = true;
+
+sideBtn('<circle cx="8" cy="8" r="5.6"/><circle cx="8" cy="8" r="2.4"/>', "Photo（真机功能）",
+  () => toast("拍照是 App 的功能，回放不写入相册"), null);
+
+sideBtn('<circle cx="8" cy="8" r="6.4"/>', "Record（真机功能）",
+  () => toast("录像是 App 的功能"), "rec");
+
+const setBtn = sideBtn(
+  '<path d="M2 5h12M2 8h12M2 11h12"/><circle cx="5.4" cy="5" r="1.5" fill="#141416"/><circle cx="10" cy="8" r="1.5" fill="#141416"/><circle cx="6.6" cy="11" r="1.5" fill="#141416"/>',
+  "Settings", () => toggleSheet(true));
+
+function setMode(i) {
+  S.mode = i;
+  S.probe = null;
+  [...sideEl.querySelectorAll("button")].forEach((b, j) => { if (j < MODES.length) b.classList.toggle("on", j === i); });
+  render();
+}
+
+let toastTimer = null;
+function toast(text) {
+  const t = document.getElementById("toast");
+  t.textContent = text;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+// ---------------------------------------------------------------- 10. 设置面板
+const sheet = document.getElementById("sheet");
+const sheetWrap = document.getElementById("sheetWrap");
+
+function toggleSheet(open) {
+  sheetWrap.classList.toggle("open", open);
+  if (open) buildSheet();
+}
+
+function buildSheet() {
+  const m = S.meta || {};
+  const rect = m.rectification || {};
+  const range = m.range_m || [];
+  const rowSlider = (label, id, min, max, val, step, fmt) => `
+    <div class="row"><span class="lbl">${label}</span>
+      <input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${val}">
+      <span class="val" id="${id}v">${fmt(val)}</span></div>`;
+  const rowRO = (label, value) => `<div class="row ro"><span class="lbl">${label}</span><span class="val">${value}</span></div>`;
+
+  sheet.innerHTML = `
+    <div class="nav"><span></span><h3>Settings</h3><button id="done">Done</button></div>
+
+    <section><div class="hdr">Depth range（可实时调）</div><div class="grp">
+      ${rowSlider("Min", "sMin", 5, 100, Math.round(S.minZ * 100), 1, v => (v / 100).toFixed(2) + " m")}
+      ${rowSlider("Max", "sMax", 50, 800, Math.round(S.maxZ * 100), 5, v => (v / 100).toFixed(1) + " m")}
+      ${rowSlider("Overlay opacity", "sAlpha", 0, 100, Math.round(S.alpha * 100), 1, v => (v / 100).toFixed(2))}
+    </div></section>
+
+    <section><div class="hdr">Stereo matching（导出时已算好，只读）</div><div class="grp">
+      ${rowRO("Algorithm", m.matcher === "sgm" ? "SGM 4 paths" : m.matcher === "block" ? "Block matching 5×5" : "—")}
+      ${rowRO("Max disparity", (m.max_disparity ?? "—") + " px")}
+      ${rowRO("Left-right check", m.lr_check ? "开" : "关")}
+      ${rowRO("P1 / P2", `${m.p1 ?? "—"} / ${m.p2 ?? "—"}`)}
+      ${rowRO("Uniqueness", m.uniqueness != null ? m.uniqueness.toFixed(2) : "—")}
+      ${rowRO("Vertical offset Δy", rect.dy_px != null ? rect.dy_px.toFixed(2) + " px" : "—")}
+      ${rowRO("Flip baseline (⇄)", rect.flip ? "是" : "否")}
+      ${rowRO("深度范围（导出时）", range.length ? `${range[0].toFixed(2)}–${range[1].toFixed(1)} m` : "—")}
+    </div></section>
+
+    <section><div class="hdr">Point cloud（可实时调）</div><div class="grp">
+      ${rowSlider("Step", "sStep", 1, 8, S.pstep, 1, v => v)}
+      ${rowSlider("Point size", "sSize", 1, 6, S.psize, 1, v => v)}
+    </div></section>
+
+    <section><div class="hdr">Object detection</div><div class="grp">
+      <div class="row"><span class="lbl">Enabled</span>
+        <div class="seg"><span id="sDet1" class="${S.detection ? "on" : ""}">开</span><span id="sDet0" class="${S.detection ? "" : "on"}">关</span></div></div>
+      ${rowRO("Model", m.detector || "—")}
+      ${rowRO("Objects", String((m.objects || []).length) + " 个")}
+    </div></section>
+
+    <section><div class="hdr">Source</div><div class="grp">
+      ${rowRO("Depth", m.source || "—")}
+      ${rowRO("Baseline", m.baseline_mm != null ? m.baseline_mm.toFixed(2) + " mm" : "—")}
+      ${rowRO("Baseline angle", rect.baseline_angle_deg != null ? (rect.baseline_angle_deg >= 0 ? "+" : "") + rect.baseline_angle_deg.toFixed(1) + "°" : "—")}
+      ${rowRO("Focal length", S.K.fx.toFixed(1) + " px")}
+      ${rowRO("Principal point", `${S.K.cx.toFixed(1)}, ${S.K.cy.toFixed(1)}`)}
+      ${rowRO("Depth map", `${S.dw}×${S.dh}`)}
+    </div></section>
+
+    <p class="note">说明：灰色的项来自 meta.json，是导出那一刻固化的参数，回放时无法重算；
+      立体算法本身要在真机（或 <code>tools/sgm_ref.py</code>）里改。</p>`;
+
+  document.getElementById("done").onclick = () => toggleSheet(false);
+  document.getElementById("dim").onclick = () => toggleSheet(false);
+
+  const bind = (id, apply, fmt) => {
+    const el = document.getElementById(id);
+    const out = document.getElementById(id + "v");
+    el.addEventListener("input", () => {
+      apply(+el.value);
+      out.textContent = fmt(+el.value);
+      render();
+    });
+  };
+  bind("sMin", v => S.minZ = v / 100, v => (v / 100).toFixed(2) + " m");
+  bind("sMax", v => S.maxZ = v / 100, v => (v / 100).toFixed(1) + " m");
+  bind("sAlpha", v => S.alpha = v / 100, v => (v / 100).toFixed(2));
+  bind("sStep", v => { S.pstep = v; render(); }, v => v);
+  bind("sSize", v => { S.psize = v; render(); }, v => v);
+  const dOn = document.getElementById("sDet1"), dOff = document.getElementById("sDet0");
+  dOn.onclick = () => { S.detection = true; detBtn.classList.add("on"); dOn.classList.add("on"); dOff.classList.remove("on"); render(); };
+  dOff.onclick = () => { S.detection = false; detBtn.classList.remove("on"); dOff.classList.add("on"); dOn.classList.remove("on"); render(); };
+}
+
+// ---------------------------------------------------------------- 11. 载入
+async function loadFiles(fileList) {
+  const byName = {};
+  for (const f of fileList) byName[f.name.toLowerCase()] = f;
+  if (!byName["depth_mm.png"]) { alert("缺少 depth_mm.png"); return; }
+
+  const dpng = await decodePNG(byName["depth_mm.png"]);
+  if (dpng.bitDepth !== 16) console.warn("depth_mm.png 不是 16 位，精度可能已丢失");
+  S.dw = dpng.w; S.dh = dpng.h;
+  const dv = new Float32Array(dpng.w * dpng.h);
+  for (let y = 0; y < dpng.h; y++) {
+    for (let x = 0; x < dpng.w; x++) {
+      const i = y * dpng.stride + x * dpng.channels * 2;
+      dv[y * dpng.w + x] = ((dpng.data[i] << 8) | dpng.data[i + 1]) / 1000;
+    }
+  }
+  S.depth = dv;
+  S.orbit.pivot = 0;
+  S.probe = null;
+
+  if (byName["meta.json"]) {
+    try { S.meta = JSON.parse(await byName["meta.json"].text()); } catch (e) { console.warn(e); }
+  }
+  if (S.meta?.intrinsics) {
+    const K = S.meta.intrinsics;
+    S.K = { fx: K.fx, fy: K.fy, cx: K.cx, cy: K.cy };
+  }
+  if (S.meta?.range_m?.length === 2) {
+    S.minZ = S.meta.range_m[0]; S.maxZ = S.meta.range_m[1];
+  }
+  if (S.meta?.baseline_mm != null) badge.textContent = S.meta.matcher === "block" ? "BLK" : "SGM";
+
+  async function bitmap(f) { try { return await createImageBitmap(f); } catch { return null; } }
+  S.rgb = null;
+  if (byName["rgb.png"]) {
+    const bmp = await bitmap(byName["rgb.png"]);
+    if (bmp) {
+      const c = document.createElement("canvas");
+      c.width = Math.min(1600, bmp.width);
+      c.height = Math.round(c.width * bmp.height / bmp.width);
+      const c2 = c.getContext("2d");
+      c2.drawImage(bmp, 0, 0, c.width, c.height);
+      const d = c2.getImageData(0, 0, c.width, c.height);
+      S.rw = c.width; S.rh = c.height; S.rch = 4;
+      S.rgb = new Float32Array(S.rw * S.rh * 4);
+      for (let i = 0; i < d.data.length; i++) S.rgb[i] = d.data[i] / 255;
+    }
+  }
+  S.view = byName["view.png"] ? await bitmap(byName["view.png"]) : null;
+  S.pair = byName["pair.png"] ? await bitmap(byName["pair.png"]) : null;
+
+  computeGrid();
+  document.getElementById("drop").classList.add("hide");
+  document.getElementById("info").textContent =
+    `${S.dw}×${S.dh} · 分割块 ${S.grid.blobs.length} · 物体 ${(S.meta?.objects || []).length}` +
+    (S.view ? " · 含 view.png" : "") + (S.pair ? " · 含 pair.png" : "");
+  document.getElementById("cmp").classList.toggle("on", false);
+  S.compare = false;
+  render();
+}
+
+// ---------------------------------------------------------------- 12. 交互
+function logical(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / (r.width / VIEW_W), y: (e.clientY - r.top) / (r.height / VIEW_H) };
+}
+
+let drag = null;
+cv.addEventListener("pointerdown", e => {
+  if (!S.depth) return;
+  const p = logical(e);
+  if (S.mode === 8) { drag = { x: p.x, y: p.y }; cv.setPointerCapture(e.pointerId); }
+  else probe(p);
+});
+cv.addEventListener("pointermove", e => {
+  if (!S.depth) return;
+  const p = logical(e);
+  if (drag && S.mode === 8) {
+    S.orbit.yaw += (p.x - drag.x) * 0.01;
+    S.orbit.pitch = Math.max(-1.4, Math.min(1.4, S.orbit.pitch + (p.y - drag.y) * 0.01));
+    drag = { x: p.x, y: p.y };
+    render();
+    return;
+  }
+  if (S.mode !== 8) probe(p);
+});
+cv.addEventListener("pointerup", e => {
+  if (drag && S.mode === 8) {
+    const p = logical(e);
+    if (Math.hypot(p.x - drag.x, p.y - drag.y) < 3) { S.orbit.yaw = -0.45; S.orbit.pitch = 0.3; S.orbit.zoom = 1; render(); }
+  }
+  drag = null;
+});
+cv.addEventListener("wheel", e => {
+  if (S.mode !== 8 || !S.depth) return;
+  e.preventDefault();
+  S.orbit.zoom = Math.max(0.3, Math.min(8, S.orbit.zoom * (e.deltaY > 0 ? 0.92 : 1.08)));
+  render();
+}, { passive: false });
+
+function probe(p) {
+  if (!S.depth || S.mode === 7 || S.mode === 8) { return; }
+  if (p.x < fit.x || p.y < fit.y || p.x > fit.x + fit.w || p.y > fit.y + fit.h) { S.probe = null; render(); return; }
+  const u = (p.x - fit.x) / fit.w, v = (p.y - fit.y) / fit.h;
+  const px = Math.min(S.dw - 1, Math.floor(u * S.dw)), py = Math.min(S.dh - 1, Math.floor(v * S.dh));
+  const z = S.depth[py * S.dw + px];
+  if (!(z > 0)) S.probe = { u, v, text: "n/a（无效）" };
+  else {
+    const X = (px + 0.5 - S.K.cx) * z / S.K.fx;
+    S.probe = { u, v, text: `Z ${z.toFixed(2)} m · X ${X >= 0 ? "+" : ""}${X.toFixed(2)} m` };
+  }
+  render();
+}
+
+document.getElementById("open").onclick = () => document.getElementById("pick").click();
+document.getElementById("pick").onchange = e => loadFiles(e.target.files);
+document.getElementById("cmp").onclick = e => {
+  S.compare = !S.compare;
+  e.target.classList.toggle("on", S.compare);
+  render();
+};
+document.getElementById("bez").onclick = e => {
+  const phone = document.getElementById("phone");
+  phone.classList.toggle("nobezel");
+  e.target.classList.toggle("on", !phone.classList.contains("nobezel"));
+  fitPhone();
+};
+
+window.addEventListener("dragover", e => e.preventDefault());
+window.addEventListener("drop", e => {
+  e.preventDefault();
+  if (e.dataTransfer?.files?.length) loadFiles(e.dataTransfer.files);
+});
+window.addEventListener("keydown", e => {
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= 9) setMode(n - 1);
+  if (e.key === "Escape") toggleSheet(false);
+});
+
+// ---------------------------------------------------------------- 13. 缩放手机
+function fitPhone() {
+  const phone = document.getElementById("phone");
+  const bez = phone.classList.contains("nobezel") ? 0 : 9;
+  const logicalW = VIEW_W + SIDE_W + bez * 2;
+  const logicalH = VIEW_H + bez * 2;
+  const stage = document.getElementById("stage");
+  const availW = stage.clientWidth - 40, availH = stage.clientHeight - 40;
+  const k = Math.max(0.25, Math.min(availW / logicalW, availH / logicalH));
+  phone.style.transform = `scale(${k})`;
+}
+
+new ResizeObserver(() => { fitPhone(); if (S.depth) render(); }).observe(document.getElementById("stage"));
+window.addEventListener("resize", () => { fitPhone(); if (S.depth) render(); });
+fitPhone();
+render();
+</script>
+</body>
+</html>
