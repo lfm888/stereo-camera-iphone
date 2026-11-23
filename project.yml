@@ -15,17 +15,20 @@ targets:
         excludes:
           - "Models/**"
     preBuildScripts:
-      - name: Compile YOLO models
+      - name: Compile CoreML models
         basedOnDependencyAnalysis: false
         script: |
-          set -- "$SRCROOT"/StereoVision/Models/*.mlpackage
-          if [ ! -d "$1" ]; then
-            echo "warning: no model in StereoVision/Models, falling back to Vision built-in detection. Run scripts/export_yolo.sh"
-            exit 0
-          fi
-          for M in "$@"; do
+          D="$SRCROOT/StereoVision/Models"
+          FOUND=0
+          for M in "$D"/*.mlpackage "$D"/*.mlmodel; do
+            [ -e "$M" ] || continue
+            case "$M" in *.mlmodel) [ -e "${M%.mlmodel}.mlpackage" ] && continue ;; esac
+            FOUND=1
             xcrun coremlcompiler compile "$M" "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH" > /dev/null
           done
+          if [ "$FOUND" = 0 ]; then
+            echo "warning: no model in StereoVision/Models, falling back to Vision built-in detection. Run scripts/export_lens_seg.sh"
+          fi
     settings:
       base:
         CODE_SIGN_STYLE: Automatic

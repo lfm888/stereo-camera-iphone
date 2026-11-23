@@ -22,6 +22,14 @@ func labelHue(_ label: String) -> Double {
     return Double(h % 360) / 360
 }
 
+/// 语义分割检测器：加载 segzoo 训练并导出的 CoreML 模型（默认 lens-seg）。
+///
+/// 模型契约由 scripts/export_lens_seg.py 写进 CoreML metadata：
+///   输入  image，RGB，img_size×img_size（训练时直接 resize，所以这里用 .scaleFill，不做 letterbox）
+///   输出  probs，(1, num_classes, H, W) 的逐像素 softmax 概率，通道 0 = background
+/// 解码：逐像素取 argmax，概率 ≥ 置信度且类别 ≥ 1 才算前景 → 去掉过小的连通域 → 同一类的所有
+/// 连通域合并成一个物体（比如一副眼镜的左右两片镜片算一个），再生成框、置信度与掩码。
+/// 模型缺失时退回 Apple 内置检测器（人 / 动物 / 显著物体），保证没有模型也能用。
 final class Detector: @unchecked Sendable {
     let name: String
     private let queue = DispatchQueue(label: "detector", qos: .userInitiated)
@@ -30,41 +38,47 @@ final class Detector: @unchecked Sendable {
     private var results: [Detection] = []
     private var seq = 0
     private let request: VNCoreMLRequest?
-    private let segment: Bool
-    private let names: [String]
+    private let net: SegNet?
+
+    /// 从 CoreML metadata 读出来的模型信息（前景类名按通道顺序，通道 0 是 background 已去掉）。
+    private struct SegNet {
+        let labels: [String]
+        let width: Int
+        let height: Int
+    }
+
+    private static let resource = "lens-seg"
 
     init() {
         let cfg = MLModelConfiguration()
         cfg.computeUnits = .all
-        func load(_ n: String) -> MLModel? {
-            Bundle.main.url(forResource: n, withExtension: "mlmodelc").flatMap { try? MLModel(contentsOf: $0, configuration: cfg) }
-        }
-        if let ml = load("yolo11n-seg"), let vn = try? VNCoreMLModel(for: ml) {
-            request = VNCoreMLRequest(model: vn)
-            segment = true
-            names = Self.classNames(ml)
-            name = "YOLO11n-seg · 80 COCO classes + masks"
-        } else if let ml = load("yolo11n"), let vn = try? VNCoreMLModel(for: ml) {
-            request = VNCoreMLRequest(model: vn)
-            segment = false
-            names = []
-            name = "YOLO11n · 80 COCO classes"
+        let ml = Bundle.main.url(forResource: Self.resource, withExtension: "mlmodelc")
+            .flatMap { try? MLModel(contentsOf: $0, configuration: cfg) }
+        if let ml, let vn = try? VNCoreMLModel(for: ml) {
+            let r = VNCoreMLRequest(model: vn)
+            r.imageCropAndScaleOption = .scaleFill
+            request = r
+            let net = Self.describe(ml)
+            self.net = net
+            name = "LensSeg (\(net.labels.joined(separator: "/")) · \(net.width)×\(net.height))"
         } else {
             request = nil
-            segment = false
-            names = []
+            net = nil
             name = "Vision built-in (people, animals, saliency)"
         }
-        request?.imageCropAndScaleOption = .scaleFill
     }
 
-    private static func classNames(_ ml: MLModel) -> [String] {
-        let meta = ml.modelDescription.metadata[.creatorDefinedKey] as? [String: String]
-        guard let raw = meta?["names"] else { return [] }
-        let pairs = raw.matches(of: #/(\d+): '([^']*)'/#).map { (Int($0.output.1) ?? 0, String($0.output.2)) }
-        var out = [String](repeating: "object", count: (pairs.map(\.0).max() ?? -1) + 1)
-        for (i, n) in pairs { out[i] = n }
-        return out
+    private static func describe(_ ml: MLModel) -> SegNet {
+        let desc = ml.modelDescription
+        let meta = desc.metadata[.creatorDefinedKey] as? [String: String] ?? [:]
+        let names = (meta["classes"] ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+        let labels = names.count > 1 ? Array(names.dropFirst()) : ["Lens"]
+        var w = 256, h = 256
+        if let c = desc.inputDescriptionsByName.values.compactMap({ $0.imageConstraint }).first {
+            w = c.pixelWidth
+            h = c.pixelHeight
+        }
+        return SegNet(labels: labels, width: w, height: h)
     }
 
     var latest: (seq: Int, items: [Detection]) {
@@ -80,9 +94,9 @@ final class Detector: @unchecked Sendable {
         guard go else { return }
         queue.async { [self] in
             let r: [Detection]
-            if let request {
+            if let request, let net {
                 try? VNImageRequestHandler(cvPixelBuffer: pb, orientation: .up).perform([request])
-                r = segment ? decodeSeg(request, minConfidence) : decodeBoxes(request, minConfidence)
+                r = decodeSemantic(request, net, minConfidence)
             } else {
                 r = runBuiltin(pb, minConfidence)
             }
@@ -98,69 +112,91 @@ final class Detector: @unchecked Sendable {
         CGRect(x: r.minX, y: 1 - r.maxY, width: r.width, height: r.height)
     }
 
-    private func decodeBoxes(_ req: VNCoreMLRequest, _ minConf: Float) -> [Detection] {
-        (req.results as? [VNRecognizedObjectObservation] ?? []).compactMap { o in
-            guard let l = o.labels.first, l.confidence >= minConf else { return nil }
-            return Detection(rect: Self.topLeft(o.boundingBox), label: l.identifier, confidence: l.confidence)
+    private func decodeSemantic(_ req: VNCoreMLRequest, _ net: SegNet, _ minConf: Float) -> [Detection] {
+        let arrays = (req.results as? [VNCoreMLFeatureValueObservation] ?? []).compactMap { $0.featureValue.multiArrayValue }
+        guard let probs = arrays.first(where: { $0.shape.count == 4 }) else { return [] }
+        let c = probs.shape[1].intValue, h = probs.shape[2].intValue, w = probs.shape[3].intValue
+        guard c > 1, w > 1, h > 1 else { return [] }
+        let read = reader(probs)
+        let sc = probs.strides[1].intValue, sh = probs.strides[2].intValue, sw = probs.strides[3].intValue
+
+        // 逐像素 argmax：0 = background，k = 第 k 个前景类（概率不足置信度的按背景处理）
+        let n = w * h
+        var cls = [UInt8](repeating: 0, count: n)
+        var conf = [Float](repeating: 0, count: n)
+        for y in 0..<h {
+            let row = y * sh
+            for x in 0..<w {
+                let base = row + x * sw
+                var best: Float = 0, bc = 0
+                for k in 0..<c {
+                    let v = read(k * sc + base)
+                    if v > best { best = v; bc = k }
+                }
+                if bc > 0 && best >= minConf {
+                    let i = y * w + x
+                    cls[i] = UInt8(truncatingIfNeeded: bc)
+                    conf[i] = best
+                }
+            }
         }
+
+        // 4 邻接连通域：keep = 1 保留，2 太小丢弃（去掉零星噪点，避免把框撑大）
+        var keep = [UInt8](repeating: 0, count: n)
+        var stack: [Int] = []
+        let minArea = max(24, n / 500)
+        for start in 0..<n where cls[start] != 0 && keep[start] == 0 {
+            let label = cls[start]
+            var comp: [Int] = []
+            keep[start] = 1
+            stack.append(start)
+            while let p = stack.popLast() {
+                comp.append(p)
+                let px = p % w, py = p / w
+                if px > 0 { push(&stack, &keep, cls, p - 1, label) }
+                if px < w - 1 { push(&stack, &keep, cls, p + 1, label) }
+                if py > 0 { push(&stack, &keep, cls, p - w, label) }
+                if py < h - 1 { push(&stack, &keep, cls, p + w, label) }
+            }
+            if comp.count < minArea { for p in comp { keep[p] = 2 } }
+        }
+
+        // 同一前景类的所有连通域合并成一个物体
+        struct Acc { var x0 = Int.max, y0 = Int.max, x1 = -1, y1 = -1, count = 0; var sum: Float = 0 }
+        var accs = [Int: Acc]()
+        for i in 0..<n where keep[i] == 1 {
+            let k = Int(cls[i]), x = i % w, y = i / w
+            var a = accs[k] ?? Acc()
+            a.x0 = min(a.x0, x); a.x1 = max(a.x1, x)
+            a.y0 = min(a.y0, y); a.y1 = max(a.y1, y)
+            a.count += 1
+            a.sum += conf[i]
+            accs[k] = a
+        }
+
+        var out: [Detection] = []
+        for (k, a) in accs.sorted(by: { $0.value.count > $1.value.count }) {
+            let mw = a.x1 - a.x0 + 1, mh = a.y1 - a.y0 + 1
+            var bits = [UInt8](repeating: 0, count: mw * mh)
+            for y in a.y0...a.y1 {
+                for x in a.x0...a.x1 {
+                    let i = y * w + x
+                    if keep[i] == 1 && Int(cls[i]) == k { bits[(y - a.y0) * mw + (x - a.x0)] = 1 }
+                }
+            }
+            let rect = CGRect(x: CGFloat(a.x0) / CGFloat(w), y: CGFloat(a.y0) / CGFloat(h),
+                              width: CGFloat(mw) / CGFloat(w), height: CGFloat(mh) / CGFloat(h))
+            let label = k - 1 < net.labels.count ? net.labels[k - 1] : "class \(k)"
+            out.append(Detection(rect: rect, label: label, confidence: a.sum / Float(a.count),
+                                 mask: Self.makeMask(bits, mw, mh, rect, hue: labelHue(label))))
+        }
+        return out
     }
 
-    private func decodeSeg(_ req: VNCoreMLRequest, _ minConf: Float) -> [Detection] {
-        let arrays = (req.results as? [VNCoreMLFeatureValueObservation] ?? []).compactMap { $0.featureValue.multiArrayValue }
-        guard let pred = arrays.first(where: { $0.shape.count == 3 }), let proto = arrays.first(where: { $0.shape.count == 4 }) else { return [] }
-        let ch = pred.shape[1].intValue, n = pred.shape[2].intValue
-        let nm = proto.shape[1].intValue, ph = proto.shape[2].intValue, pw = proto.shape[3].intValue
-        let nc = ch - 4 - nm
-        let s1 = pred.strides[1].intValue, s2 = pred.strides[2].intValue
-        let read = reader(pred)
-
-        var cands: [(i: Int, c: Int, s: Float)] = []
-        for i in 0..<n {
-            var best: Float = 0, bc = 0
-            for c in 0..<nc {
-                let v = read((4 + c) * s1 + i * s2)
-                if v > best { best = v; bc = c }
-            }
-            if best >= minConf { cands.append((i, bc, best)) }
-        }
-        cands.sort { $0.s > $1.s }
-
-        var kept: [(i: Int, c: Int, s: Float, r: CGRect)] = []
-        for k in cands {
-            let cx = read(k.i * s2), cy = read(s1 + k.i * s2), w = read(2 * s1 + k.i * s2), h = read(3 * s1 + k.i * s2)
-            let r = CGRect(x: CGFloat(cx - w / 2) / 640, y: CGFloat(cy - h / 2) / 640, width: CGFloat(w) / 640, height: CGFloat(h) / 640)
-                .intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
-            guard !r.isNull, r.width > 0, r.height > 0 else { continue }
-            if kept.contains(where: { $0.c == k.c && iou($0.r, r) > 0.45 }) { continue }
-            kept.append((k.i, k.c, k.s, r))
-            if kept.count == 30 { break }
-        }
-        guard !kept.isEmpty else { return [] }
-
-        var coeffs = [Float](repeating: 0, count: kept.count * nm)
-        for (j, k) in kept.enumerated() {
-            for m in 0..<nm { coeffs[j * nm + m] = read((4 + nc + m) * s1 + k.i * s2) }
-        }
-        let protoDense = dense(proto, nm, ph, pw)
-        var logits = [Float](repeating: 0, count: kept.count * ph * pw)
-        vDSP_mmul(coeffs, 1, protoDense, 1, &logits, 1, vDSP_Length(kept.count), vDSP_Length(ph * pw), vDSP_Length(nm))
-
-        return kept.enumerated().map { j, k in
-            let label = k.c < names.count ? names[k.c] : "class \(k.c)"
-            let x0 = max(0, Int(k.r.minX * CGFloat(pw))), x1 = min(pw, Int(ceil(k.r.maxX * CGFloat(pw))))
-            let y0 = max(0, Int(k.r.minY * CGFloat(ph))), y1 = min(ph, Int(ceil(k.r.maxY * CGFloat(ph))))
-            var mask: Mask?
-            if x1 > x0, y1 > y0 {
-                let mw = x1 - x0, mh = y1 - y0
-                var bits = [UInt8](repeating: 0, count: mw * mh)
-                let base = j * ph * pw
-                for y in 0..<mh {
-                    for x in 0..<mw where logits[base + (y0 + y) * pw + x0 + x] > 0 { bits[y * mw + x] = 1 }
-                }
-                let rect = CGRect(x: CGFloat(x0) / CGFloat(pw), y: CGFloat(y0) / CGFloat(ph), width: CGFloat(mw) / CGFloat(pw), height: CGFloat(mh) / CGFloat(ph))
-                mask = Self.makeMask(bits, mw, mh, rect, hue: labelHue(label))
-            }
-            return Detection(rect: k.r, label: label, confidence: k.s, mask: mask)
+    private func push(_ stack: inout [Int], _ keep: inout [UInt8], _ cls: [UInt8], _ i: Int, _ label: UInt8) {
+        if keep[i] == 0 && cls[i] == label {
+            keep[i] = 1
+            stack.append(i)
         }
     }
 
@@ -170,20 +206,6 @@ final class Detector: @unchecked Sendable {
             return { Float(p.load(fromByteOffset: $0 * 2, as: Float16.self)) }
         }
         return { p.load(fromByteOffset: $0 * 4, as: Float.self) }
-    }
-
-    private func dense(_ a: MLMultiArray, _ c: Int, _ h: Int, _ w: Int) -> [Float] {
-        let read = reader(a)
-        let s = a.strides.map(\.intValue)
-        var out = [Float](repeating: 0, count: c * h * w)
-        for k in 0..<c {
-            for y in 0..<h {
-                let row = k * s[1] + y * s[2]
-                let o = (k * h + y) * w
-                for x in 0..<w { out[o + x] = read(row + x * s[3]) }
-            }
-        }
-        return out
     }
 
     private static func makeMask(_ bits: [UInt8], _ w: Int, _ h: Int, _ rect: CGRect, hue: Double) -> Mask? {

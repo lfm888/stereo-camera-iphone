@@ -59,7 +59,7 @@ struct PipelineSettings: Sendable {
     var yOffset: Float = 0
     var flip = false
     var detection = true
-    var confidence: Float = 0.4
+    var confidence: Float = 0.5
     var calibrate = true
 }
 
@@ -151,7 +151,7 @@ final class AppModel {
     var yOffset: Float = 0 { didSet { push { $0.yOffset = self.yOffset } } }
     var flip = false { didSet { push { $0.flip = self.flip } } }
     var detection = true { didSet { push { $0.detection = self.detection } } }
-    var confidence: Float = 0.4 { didSet { push { $0.confidence = self.confidence } } }
+    var confidence: Float = 0.5 { didSet { push { $0.confidence = self.confidence } } }
     var overlayAlpha: Float = 0.55
     var yaw: Float = 0
     var pitch: Float = 0

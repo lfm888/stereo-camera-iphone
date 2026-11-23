@@ -87,7 +87,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = CDDD9B713AF75444BF35DEC2 /* Build configuration list for PBXNativeTarget "StereoVision" */;
 			buildPhases = (
-				5AA7DE10E3D1E70A9B6EAAEF /* Compile YOLO models */,
+				5AA7DE10E3D1E70A9B6EAAEF /* Compile CoreML models */,
 				1A6D2965C037B38A159E3D4D /* Sources */,
 				3D19F3DDE1BE765248F94D4E /* Resources */,
 			);
@@ -148,7 +148,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		5AA7DE10E3D1E70A9B6EAAEF /* Compile YOLO models */ = {
+		5AA7DE10E3D1E70A9B6EAAEF /* Compile CoreML models */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -158,14 +158,14 @@
 			);
 			inputPaths = (
 			);
-			name = "Compile YOLO models";
+			name = "Compile CoreML models";
 			outputFileListPaths = (
 			);
 			outputPaths = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -- \"$SRCROOT\"/StereoVision/Models/*.mlpackage\nif [ ! -d \"$1\" ]; then\n  echo \"warning: no model in StereoVision/Models, falling back to Vision built-in detection. Run scripts/export_yolo.sh\"\n  exit 0\nfi\nfor M in \"$@\"; do\n  xcrun coremlcompiler compile \"$M\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\" > /dev/null\ndone\n";
+			shellScript = "D=\"$SRCROOT/StereoVision/Models\"\nFOUND=0\nfor M in \"$D\"/*.mlpackage \"$D\"/*.mlmodel; do\n  [ -e \"$M\" ] || continue\n  case \"$M\" in *.mlmodel) [ -e \"${M%.mlmodel}.mlpackage\" ] && continue ;; esac\n  FOUND=1\n  xcrun coremlcompiler compile \"$M\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\" > /dev/null\ndone\nif [ \"$FOUND\" = 0 ]; then\n  echo \"warning: no model in StereoVision/Models, falling back to Vision built-in detection. Run scripts/export_lens_seg.sh\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

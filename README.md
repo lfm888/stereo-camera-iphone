@@ -12,7 +12,7 @@
 >
 > HUD 里的基线角度 $\beta$ 可以直接确认镜头排布：接近 0°/180° 为左右并排，接近 ±45°/±135° 为对角排列（本页演示视频中为 −135°）。细节见 [镜头排布](#镜头排布)。
 
-StereoVision 把 iPhone 的后置双摄（广角 + 超广角）变成一台实时的**立体相机**：测出物体的远近，识别并勾出物体轮廓（COCO 的 80 个日常类别：人、椅子、瓶子、笔记本……），并用 9 种方式呈现场景，从经典深度图到可以拖动旋转的 3D 点云。
+StereoVision 把 iPhone 的后置双摄（广角 + 超广角）变成一台实时的**立体相机**：测出物体的远近，用自己训练的语义分割模型识别并勾出物体轮廓（当前模型的分割目标是 `Lens`），并用 9 种方式呈现场景，从经典深度图到可以拖动旋转的 3D 点云。
 
 > **已在 iPhone 16 与 iPhone 15 Plus 上测试。** 只要 iPhone 有「广角 + 超广角」后置双摄就能跑，与两颗镜头的排布无关：程序会读取这对镜头的外参，因此竖排（iPhone 16）、对角（iPhone 13–15）或水平排布都能被正确配准。相机格式、标定与帧率可能因机型而异。LiDAR 数据源尚未在真机上运行过。
 
@@ -23,7 +23,7 @@ StereoVision 把 iPhone 的后置双摄（广角 + 超广角）变成一台实�
 ## 功能
 
 - **实时深度**：在 iPhone 16 上约 20+ fps
-- **目标检测与分割**：使用 YOLO11n-seg，每个物体都有类别、置信度、彩色掩码，以及一个跨帧跟随它的 ID
+- **目标检测与分割**：用自己训练的语义分割模型（`lens-seg`：YOLO11n 骨干 + 轻量语义头，256×256，2 类 `background` / `Lens`），把分割结果变成带类别、置信度、彩色掩码的物体，并跨帧跟随（同一类的碎片会合并成一个物体）
 - **尺寸测量**：每个物体给出距离、横向偏移和近似宽 × 高（cm）
 - **点选测距**：点屏幕上任意一点即可测距；准星始终显示画面中心的距离
 - **三种深度来源**：自研立体匹配（默认）、Apple 的 Dual-Wide 深度、以及 iPhone Pro（12 Pro 及以后）上的 LiDAR。没有该传感器的机型不会出现 LiDAR 选项。LiDAR 用激光飞行时间直接测距，在立体视觉失效的无纹理墙面上也能工作，量程约 5 m，因此很适合作为评估立体匹配的真值
@@ -125,7 +125,7 @@ $$\Delta Z \approx \frac{Z^2}{f \cdot B}\,\Delta d$$
 
 ## 性能与精度
 
-**速度（iPhone 16，SGM + 左右一致性检查 + YOLO11n-seg）：** 约 20–22 fps，稳定。相机上限 30 fps。想用精度换速度，可以把最大视差降到 32，或在设置里切换成块匹配。
+**速度（iPhone 16，SGM + 左右一致性检查 + 分割模型）：** 约 20–22 fps，稳定。相机上限 30 fps。想用精度换速度，可以把最大视差降到 32，或在设置里切换成块匹配。
 
 **匹配精度**（`swift scripts/verify_stereo.swift`，在 Mac 上直接跑 App 的 GPU 代码；合成场景的视差已知，含一个斜面、一个前景物体，以及一条几乎没有纹理的区域（对比度 4%））：
 
@@ -143,16 +143,21 @@ $$\Delta Z \approx \frac{Z^2}{f \cdot B}\,\Delta d$$
 
 ## 快速开始
 
-环境要求：具备 Dual-Wide 摄像头的 iPhone、iOS 18+、Xcode 26+（含 Metal Toolchain：`xcodebuild -downloadComponent MetalToolchain`），以及用于导出 YOLO 模型的 [uv](https://github.com/astral-sh/uv)。
+环境要求：具备 Dual-Wide 摄像头的 iPhone、iOS 18+、Xcode 26+（含 Metal Toolchain：`xcodebuild -downloadComponent MetalToolchain`），以及用来导出分割模型的 Python（torch + coremltools + segzoo 仓库的依赖，推荐直接用 segzoo 训练时那套 conda 环境）。
 
 ```sh
 git clone <repo> && cd stereo-camera-iphone
 cp Config/Local.xcconfig.example Config/Local.xcconfig   # 填入你的 Apple team ID 和唯一的 bundle id
-scripts/export_yolo.sh                                   # 下载并转换 YOLO11n-seg
+python scripts/export_lens_seg.py \
+    --ckpt <segzoo>/runs/lens_dataset/yolo11_n_256x256/best.pth --segzoo <segzoo>   # best.pth -> CoreML
 open StereoVision.xcodeproj                              # 在你的 iPhone 上运行
 ```
 
-没有 YOLO 模型也能用，此时会退回到 Apple 自带的检测器（人、动物、显著物体）。把手机**横过来**：iPhone 16 请让灵动岛朝左；对于两颗镜头呈对角排列的机型（如 iPhone 15 Plus），两个横屏方向都可以，画面都会保持正立。
+`scripts/export_lens_seg.py` 读的是 segzoo 的 `best.pth`：里面只有 `state_dict` 和描述结构的 `meta`（arch / encoder / num_classes / img_size / 归一化），所以要靠 segzoo 的 `models.load_checkpoint()` 重建网络，再用 coremltools 导出。导出的模型把“/255 + 归一化 + softmax”都写进了图里，类名、输入尺寸、归一化参数写进 CoreML metadata，App 侧不硬编码任何类别（换数据集重训后只要重新导一次模型，同一个 App 就能跑）。
+
+在 macOS / Linux 上脚本导出 float16 的 `.mlpackage`；Windows 上的 coremltools 缺原生库，会自动回退成 float32 的 `.mlmodel`——两者都会被 `project.yml` 的 preBuild 编译成 `lens-seg.mlmodelc`，App 侧无差别。
+
+没有模型也能用，此时会退回到 Apple 自带的检测器（人、动物、显著物体）。把手机**横过来**：iPhone 16 请让灵动岛朝左；对于两颗镜头呈对角排列的机型（如 iPhone 15 Plus），两个横屏方向都可以，画面都会保持正立。
 
 ## 实现细节
 
@@ -183,7 +188,7 @@ $T_{\Delta y}$ 是给超广角那一路的垂直平移，用来吃掉残余的�
 
 ### 视差匹配：传统方法，没有神经网络
 
-Census 7×7 压成 48 bit，汉明距离当代价 → SGM 4 路径聚合（$P_2$ 随图像梯度自适应）→ WTA + uniqueness + 左右一致性 + 抛物线亚像素 → $Z=fB/d$。设置里可切成 5×5 块匹配。YOLO11n-seg 只做分割，**完全不参与视差**。
+Census 7×7 压成 48 bit，汉明距离当代价 → SGM 4 路径聚合（$P_2$ 随图像梯度自适应）→ WTA + uniqueness + 左右一致性 + 抛物线亚像素 → $Z=fB/d$。设置里可切成 5×5 块匹配。分割模型只做分割，**完全不参与视差**。
 
 **为什么能实时**（约 20–22 fps）：640×360 只有 23 万像素；代价是 `popcount` 位运算；代价体积用 `uchar`（14.7 MB 而非 88 MB）；只跑 4 条路径；GPU 上「一个线程组 = 一条扫描线、线程 = 一个视差」，动态规划状态放在片上 `prev[]`、沿扫描线串行推进；整帧一条 command buffer，CPU 不读回。瓶颈是显存带宽（每帧约 300 MB，下限 ≈6 ms），不是算力。
 
