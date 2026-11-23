@@ -75,8 +75,8 @@ final class Detector: @unchecked Sendable {
         let labels = names.count > 1 ? Array(names.dropFirst()) : ["Lens"]
         var w = 256, h = 256
         if let c = desc.inputDescriptionsByName.values.compactMap({ $0.imageConstraint }).first {
-            w = c.pixelWidth
-            h = c.pixelHeight
+            w = c.pixelsWide
+            h = c.pixelsHigh
         }
         return SegNet(labels: labels, width: w, height: h)
     }
