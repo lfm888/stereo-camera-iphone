@@ -1,4 +1,5 @@
 import AVFoundation
+import ImageIO
 import Metal
 import Observation
 import QuartzCore
@@ -60,6 +61,26 @@ enum DisplayOrientation: Int, Sendable, CaseIterable {
 
     var isPortrait: Bool { self == .portrait || self == .portraitUpsideDown }
 
+    /// 反方向：用来把屏幕坐标系的东西转回相机 buffer 坐标系。
+    var inverse: DisplayOrientation {
+        switch self {
+        case .landscapeRight: .landscapeRight
+        case .portrait: .portraitUpsideDown
+        case .landscapeLeft: .landscapeLeft
+        case .portraitUpsideDown: .portrait
+        }
+    }
+
+    /// 交给 Vision 的方向：它会先把 buffer 转正，再 crop/scale 给 CoreML。
+    var visionOrientation: CGImagePropertyOrientation {
+        switch self {
+        case .landscapeRight: .up
+        case .portrait: .right
+        case .landscapeLeft: .down
+        case .portraitUpsideDown: .left
+        }
+    }
+
     var key: String {
         switch self {
         case .landscapeRight: "landscape_right"
@@ -99,6 +120,11 @@ enum DisplayOrientation: Int, Sendable, CaseIterable {
 
     func screen(_ r: CGRect) -> CGRect {
         let a = screen(CGPoint(x: r.minX, y: r.minY)), b = screen(CGPoint(x: r.maxX, y: r.maxY))
+        return CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
+    }
+
+    func buffer(_ r: CGRect) -> CGRect {
+        let a = buffer(CGPoint(x: r.minX, y: r.minY)), b = buffer(CGPoint(x: r.maxX, y: r.maxY))
         return CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
     }
 

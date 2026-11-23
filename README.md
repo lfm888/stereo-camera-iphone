@@ -1,4 +1,4 @@
-<p align="center"><img src="docs/logo.png" width="240" alt="StereoVision"></p>
+<p align="center"><img src="docs/self-logo.png" width="240" alt="StereoVision"></p>
 
 <p align="center"><a href="docs/demo.mp4"><img src="docs/demo.gif" width="800" alt="StereoVision 在 iPhone 15 Plus 上的演示：实时深度、物体掩码、尺寸测量与点云"></a><br><sub>在 iPhone 15 Plus 上录制 · 点击查看 0.8 MB 的 MP4 原片</sub></p>
 
@@ -29,7 +29,7 @@ StereoVision 把 iPhone 的后置双摄（广角 + 超广角）变成一台实�
 ## 功能
 
 - **实时深度**：在 iPhone 16 上约 20+ fps
-- **目标检测与分割**：用自己训练的语义分割模型（`lens-seg`：YOLO11n 骨干 + 轻量语义头，256×256，2 类 `background` / `Lens`），把分割结果变成带类别、置信度、彩色掩码的物体，并跨帧跟随（同一类的碎片会合并成一个物体）
+- **目标检测与分割**：用自己训练的语义分割模型（`lens-seg`：YOLO11n 骨干 + 轻量语义头，256×256，2 类 `background` / `Lens`）。喂图前先把画面按当前方向转正，再取**长宽 min 为边长的中央正方形**缩到 256×256（训练样本是正方的，整幅拉伸会把镜头拉变形），分割结果变成带类别、置信度、彩色掩码的物体，并跨帧跟随（同一类的碎片会合并成一个物体）
 - **尺寸测量**：每个物体给出距离、横向偏移和近似宽 × 高（cm）
 - **点选测距**：点屏幕上任意一点即可测距；准星始终显示画面中心的距离
 - **三种深度来源**：自研立体匹配（默认）、Apple 的 Dual-Wide 深度、以及 iPhone Pro（12 Pro 及以后）上的 LiDAR。没有该传感器的机型不会出现 LiDAR 选项。LiDAR 用激光飞行时间直接测距，在立体视觉失效的无纹理墙面上也能工作，量程约 5 m，因此很适合作为评估立体匹配的真值
@@ -160,6 +160,8 @@ open StereoVision.xcodeproj                              # 在你的 iPhone 上�
 ```
 
 `scripts/export_lens_seg.py` 读的是 segzoo 的 `best.pth`：里面只有 `state_dict` 和描述结构的 `meta`（arch / encoder / num_classes / img_size / 归一化），所以要靠 segzoo 的 `models.load_checkpoint()` 重建网络，再用 coremltools 导出。导出的模型把“/255 + 归一化 + softmax”都写进了图里，类名、输入尺寸、归一化参数写进 CoreML metadata，App 侧不硬编码任何类别（换数据集重训后只要重新导一次模型，同一个 App 就能跑）。
+
+App 侧的预处理与训练一致：`VNImageRequestHandler` 先按屏幕方向把 buffer 转正，`imageCropAndScaleOption = .centerCrop` 取边长 = `min(宽, 高)` 的中央正方形，再等比缩到模型输入；掩码会按“裁剪偏移 + 方向”换回相机坐标系，所以测距和叠层仍然对齐。
 
 在 macOS / Linux 上脚本导出 float16 的 `.mlpackage`；Windows 上的 coremltools 缺原生库，会自动回退成 float32 的 `.mlmodel`——两者都会被 `project.yml` 的 preBuild 编译成 `lens-seg.mlmodelc`，App 侧无差别。
 

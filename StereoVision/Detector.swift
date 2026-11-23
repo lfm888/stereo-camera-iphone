@@ -1,5 +1,6 @@
 import Accelerate
 import CoreML
+import ImageIO
 import UIKit
 import Vision
 
@@ -25,8 +26,13 @@ func labelHue(_ label: String) -> Double {
 /// 语义分割检测器：加载 segzoo 训练并导出的 CoreML 模型（默认 lens-seg）。
 ///
 /// 模型契约由 scripts/export_lens_seg.py 写进 CoreML metadata：
-///   输入  image，RGB，img_size×img_size（训练时直接 resize，所以这里用 .scaleFill，不做 letterbox）
+///   输入  image，RGB，img_size×img_size；预处理 = 取长宽 min 为边长的**中央正方形**再缩到 img_size
+///        （训练时是按长宽相等的正方形样本喂的，整幅拉伸会把镜头拉变形成椭圆，所以用 .centerCrop）
 ///   输出  probs，(1, num_classes, H, W) 的逐像素 softmax 概率，通道 0 = background
+///
+/// 采集到的 buffer 一直是传感器的横屏坐标系，手机竖着拿时画面在 buffer 里躺了 90°，而模型只认识正立的
+/// 物体（训练数据就是正立的人脸 / 眼镜）。所以这里把当前 DisplayOrientation 交给 Vision，让它先把图转正
+/// （转完之后才做中央裁剪 + 缩放），解出来的掩码再按裁剪偏移和方向转回 buffer 坐标系给测距用。
 /// 解码：逐像素取 argmax，概率 ≥ 置信度且类别 ≥ 1 才算前景 → 去掉过小的连通域 → 同一类的所有
 /// 连通域合并成一个物体（比如一副眼镜的左右两片镜片算一个），再生成框、置信度与掩码。
 /// 模型缺失时退回 Apple 内置检测器（人 / 动物 / 显著物体），保证没有模型也能用。
@@ -56,7 +62,7 @@ final class Detector: @unchecked Sendable {
             .flatMap { try? MLModel(contentsOf: $0, configuration: cfg) }
         if let ml, let vn = try? VNCoreMLModel(for: ml) {
             let r = VNCoreMLRequest(model: vn)
-            r.imageCropAndScaleOption = .scaleFill
+            r.imageCropAndScaleOption = .centerCrop      // 长宽 min 的中央正方形，再等比缩到模型输入
             request = r
             let net = Self.describe(ml)
             self.net = net
@@ -95,10 +101,12 @@ final class Detector: @unchecked Sendable {
         queue.async { [self] in
             let r: [Detection]
             if let request, let net {
-                try? VNImageRequestHandler(cvPixelBuffer: pb, orientation: .up).perform([request])
-                r = decodeSemantic(request, net, minConfidence, orientation)
+                // 按当前屏幕方向把 buffer 转正，模型看到的才和训练时一致
+                try? VNImageRequestHandler(cvPixelBuffer: pb, orientation: orientation.visionOrientation).perform([request])
+                r = decodeSemantic(request, net, minConfidence, orientation,
+                                   frame: (CVPixelBufferGetWidth(pb), CVPixelBufferGetHeight(pb)))
             } else {
-                r = runBuiltin(pb, minConfidence)
+                r = runBuiltin(pb, minConfidence, orientation)
             }
             lock.withLock {
                 results = r
@@ -112,7 +120,8 @@ final class Detector: @unchecked Sendable {
         CGRect(x: r.minX, y: 1 - r.maxY, width: r.width, height: r.height)
     }
 
-    private func decodeSemantic(_ req: VNCoreMLRequest, _ net: SegNet, _ minConf: Float, _ orientation: DisplayOrientation) -> [Detection] {
+    private func decodeSemantic(_ req: VNCoreMLRequest, _ net: SegNet, _ minConf: Float,
+                                _ orientation: DisplayOrientation, frame: (w: Int, h: Int)) -> [Detection] {
         let arrays = (req.results as? [VNCoreMLFeatureValueObservation] ?? []).compactMap { $0.featureValue.multiArrayValue }
         guard let probs = arrays.first(where: { $0.shape.count == 4 }) else { return [] }
         let c = probs.shape[1].intValue, h = probs.shape[2].intValue, w = probs.shape[3].intValue
@@ -184,11 +193,23 @@ final class Detector: @unchecked Sendable {
                     if keep[i] == 1 && Int(cls[i]) == k { bits[(y - a.y0) * mw + (x - a.x0)] = 1 }
                 }
             }
-            let rect = CGRect(x: CGFloat(a.x0) / CGFloat(w), y: CGFloat(a.y0) / CGFloat(h),
-                              width: CGFloat(mw) / CGFloat(w), height: CGFloat(mh) / CGFloat(h))
+            // 这里的 rect/bits 在“转正 + 中央裁剪”后的图像空间，先按裁剪偏移换回转正后的整幅图（= 屏幕空间），
+            // 再用 orientation.buffer 转回相机 buffer 坐标系：rect 给测距采样，image 留屏幕空间。
+            let vw = CGFloat(orientation.isPortrait ? frame.h : frame.w)   // Vision 转正后的宽高
+            let vh = CGFloat(orientation.isPortrait ? frame.w : frame.h)
+            let side = min(vw, vh)                                         // .centerCrop 的边长
+            let sx = side / vw, sy = side / vh
+            let ox = (vw - side) / 2 / vw, oy = (vh - side) / 2 / vh
+            let gw = CGFloat(w), gh = CGFloat(h)                           // 模型输出的网格
+            let rectS = CGRect(x: ox + CGFloat(a.x0) / gw * sx, y: oy + CGFloat(a.y0) / gh * sy,
+                               width: CGFloat(mw) / gw * sx, height: CGFloat(mh) / gh * sy)
+            let rectB = orientation.buffer(rectS)
+            let back = Self.oriented(bits, mw, mh, orientation.inverse)
             let label = k - 1 < net.labels.count ? net.labels[k - 1] : "class \(k)"
-            out.append(Detection(rect: rect, label: label, confidence: a.sum / Float(a.count),
-                                 mask: Self.makeMask(bits, mw, mh, rect, hue: labelHue(label), orientation: orientation)))
+            out.append(Detection(rect: rectB, label: label, confidence: a.sum / Float(a.count),
+                                 mask: Self.maskImage(bits, mw, mh, hue: labelHue(label)).map {
+                                     Mask(rect: rectB, w: back.w, h: back.h, bits: back.bits, image: $0)
+                                 }))
         }
         return out
     }
@@ -208,27 +229,22 @@ final class Detector: @unchecked Sendable {
         return { p.load(fromByteOffset: $0 * 4, as: Float.self) }
     }
 
-    private static func makeMask(_ bits: [UInt8], _ w: Int, _ h: Int, _ rect: CGRect, hue: Double,
-                                 orientation: DisplayOrientation) -> Mask? {
+    private static func maskImage(_ bits: [UInt8], _ w: Int, _ h: Int, hue: Double) -> CGImage? {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
         UIColor(hue: hue, saturation: 0.8, brightness: 0.95, alpha: 1).getRed(&r, green: &g, blue: &b, alpha: nil)
         let a: CGFloat = 0.45
         let px = [UInt8(r * a * 255), UInt8(g * a * 255), UInt8(b * a * 255), UInt8(a * 255)]
-        // 显示用的图按屏幕方向预先转好（OverlayView 只是把它画进转好的矩形）；
-        // Mask.bits / rect 仍留在相机 buffer 坐标系，测距采样（StereoFrame.sample）不受影响。
-        let d = oriented(bits, w, h, orientation)
-        var rgba = [UInt8](repeating: 0, count: d.w * d.h * 4)
-        for i in 0..<(d.w * d.h) where d.bits[i] != 0 {
+        var rgba = [UInt8](repeating: 0, count: w * h * 4)
+        for i in 0..<(w * h) where bits[i] != 0 {
             rgba[i * 4] = px[0]; rgba[i * 4 + 1] = px[1]; rgba[i * 4 + 2] = px[2]; rgba[i * 4 + 3] = px[3]
         }
-        guard let provider = CGDataProvider(data: Data(rgba) as CFData),
-              let img = CGImage(width: d.w, height: d.h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: d.w * 4,
-                                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-                                provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { return nil }
-        return Mask(rect: rect, w: w, h: h, bits: bits, image: img)
+        guard let provider = CGDataProvider(data: Data(rgba) as CFData) else { return nil }
+        return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+                       space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
 
-    /// 把 buffer 坐标系的掩码位图转成屏幕坐标系（与 DisplayOrientation.screen 一致）。
+    /// 把掩码位图从一个坐标系转成另一个（与 DisplayOrientation.screen 一致）。
     private static func oriented(_ bits: [UInt8], _ w: Int, _ h: Int, _ o: DisplayOrientation) -> (bits: [UInt8], w: Int, h: Int) {
         guard o != .landscapeRight else { return (bits, w, h) }
         var d = [UInt8](repeating: 0, count: bits.count)
@@ -246,8 +262,9 @@ final class Detector: @unchecked Sendable {
         return (d, o.isPortrait ? h : w, o.isPortrait ? w : h)
     }
 
-    private func runBuiltin(_ pb: CVPixelBuffer, _ minConf: Float) -> [Detection] {
-        let handler = VNImageRequestHandler(cvPixelBuffer: pb, orientation: .up)
+    private func runBuiltin(_ pb: CVPixelBuffer, _ minConf: Float, _ orientation: DisplayOrientation) -> [Detection] {
+        // 内置检测器同样先把图转正（不转的话竖屏下画面是躺倒的，识别会变差），再把结果转回 buffer 坐标系
+        let handler = VNImageRequestHandler(cvPixelBuffer: pb, orientation: orientation.visionOrientation)
         let humans = VNDetectHumanRectanglesRequest()
         humans.upperBodyOnly = false
         let animals = VNRecognizeAnimalsRequest()
@@ -255,21 +272,21 @@ final class Detector: @unchecked Sendable {
         try? handler.perform([humans, animals, saliency])
 
         var out: [Detection] = (humans.results ?? []).filter { $0.confidence >= minConf }.map {
-            Detection(rect: Self.topLeft($0.boundingBox), label: "person", confidence: $0.confidence)
+            Detection(rect: orientation.buffer(Self.topLeft($0.boundingBox)), label: "person", confidence: $0.confidence)
         }
         for a in animals.results ?? [] {
             guard let l = a.labels.first, l.confidence >= minConf else { continue }
-            out.append(Detection(rect: Self.topLeft(a.boundingBox), label: l.identifier.lowercased(), confidence: l.confidence))
+            out.append(Detection(rect: orientation.buffer(Self.topLeft(a.boundingBox)), label: l.identifier.lowercased(), confidence: l.confidence))
         }
         let salient = saliency.results?.first?.salientObjects ?? []
         for s in salient.prefix(4) {
             let r = Self.topLeft(s.boundingBox)
-            guard !out.contains(where: { iou($0.rect, r) > 0.4 }) else { continue }
+            guard !out.contains(where: { iou($0.rect, orientation.buffer(r)) > 0.4 }) else { continue }
             let cls = VNClassifyImageRequest()
             cls.regionOfInterest = s.boundingBox
             try? handler.perform([cls])
             let top = (cls.results ?? []).first { $0.confidence > 0.12 }
-            out.append(Detection(rect: r, label: top?.identifier.replacingOccurrences(of: "_", with: " ") ?? "object", confidence: top?.confidence ?? s.confidence))
+            out.append(Detection(rect: orientation.buffer(r), label: top?.identifier.replacingOccurrences(of: "_", with: " ") ?? "object", confidence: top?.confidence ?? s.confidence))
         }
         return out
     }
