@@ -13,7 +13,7 @@ struct DisplayParams {
     var alpha: Float
     var hasRight: Int32
     var hasLabels: Int32
-    var pad0: Int32 = 0
+    var orient: Int32 = 0          // DisplayOrientation.rawValue：屏幕相对相机 buffer 转多少
     var pad1: Int32 = 0
 }
 
@@ -117,7 +117,8 @@ final class Renderer: NSObject, MTKViewDelegate {
             drawPoints(enc, frame, model, Float(size.width / max(1, size.height)), pointSize: Float(max(2, size.width / 550)))
         } else {
             var p = DisplayParams(mode: model.mode.shaderIndex, minZ: model.minZ, maxZ: model.maxZ, alpha: model.overlayAlpha,
-                                  hasRight: frame.right == nil ? 0 : 1, hasLabels: hasLabels ? 1 : 0)
+                                  hasRight: frame.right == nil ? 0 : 1, hasLabels: hasLabels ? 1 : 0,
+                                  orient: Int32(model.orientation.rawValue))
             enc.setRenderPipelineState(display)
             enc.setDepthStencilState(depthOff)
             enc.setFragmentTexture(frame.color, index: 0)
@@ -159,7 +160,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         let step = max(1, f.width / 320)
         let fovy = 2 * atan(Float(f.height) / 2 / f.K.fy)
         let pivot: Float = 1.2
-        let view = translate(0, 0, -m.orbit) * rotateX(m.pitch) * rotateY(m.yaw) * translate(0, 0, pivot)
+        // 点云在相机坐标系里；竖屏时再把整个场景绕光轴转回去，"上"才跟屏幕上看到的一致。
+        let roll = -Float(m.orientation.rawValue) * .pi / 2
+        let view = translate(0, 0, -m.orbit) * rotateX(m.pitch) * rotateY(m.yaw) * rotateZ(roll) * translate(0, 0, pivot)
         var p = PCParams(mvp: perspective(fovy: fovy, aspect: aspect, near: 0.02, far: 50) * view,
                          fx: f.K.fx, fy: f.K.fy, cx: f.K.cx, cy: f.K.cy, minZ: m.minZ, maxZ: m.maxZ, pointSize: pointSize,
                          w: UInt32(f.width), h: UInt32(f.height), step: UInt32(step))
@@ -189,4 +192,8 @@ func rotateX(_ a: Float) -> simd_float4x4 {
 
 func rotateY(_ a: Float) -> simd_float4x4 {
     simd_float4x4(simd_quatf(angle: a, axis: SIMD3(0, 1, 0)))
+}
+
+func rotateZ(_ a: Float) -> simd_float4x4 {
+    simd_float4x4(simd_quatf(angle: a, axis: SIMD3(0, 0, 1)))
 }

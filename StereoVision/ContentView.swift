@@ -80,7 +80,7 @@ struct HUD: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(model.mode.title).font(.headline)
-            Text("\(Int(model.fps)) fps" + (model.source == .stereo ? String(format: " · GPU %.1f ms", model.gpuMs) : ""))
+            Text("\(Int(model.fps)) fps · \(model.orientation.label)" + (model.source == .stereo ? String(format: " · GPU %.1f ms", model.gpuMs) : ""))
             if model.source == .stereo {
                 Text(String(format: "B %.1f mm · β %+.0f° · f %.0f px", model.baselineMM, model.baselineDeg, model.K.fx))
                 Text(String(format: "Δy %.2f px%@", model.yOffset, model.flip ? " · ⇄" : "")

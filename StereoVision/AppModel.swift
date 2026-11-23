@@ -47,6 +47,72 @@ enum Matcher: String, CaseIterable, Identifiable, Sendable {
     var title: String { self == .sgm ? "SGM 4 paths" : "Block matching 5×5" }
 }
 
+/// 显示方向：手机怎么拿，屏幕上就把画面转多少。
+///
+/// 采集和匹配永远跑在传感器的横屏坐标系里（buffer 640×360），所以转屏不会重开 session、
+/// 不丢帧、不用重新标定，深度/掩码/外参也都不变；只有“怎么显示”在变：
+///   0 landscapeRight     buffer 原样贴屏（原来的唯一姿势）
+///   1 portrait           内容顺时针转 90°
+///   2 landscapeLeft      180°
+///   3 portraitUpsideDown 270°
+enum DisplayOrientation: Int, Sendable, CaseIterable {
+    case landscapeRight = 0, portrait = 1, landscapeLeft = 2, portraitUpsideDown = 3
+
+    var isPortrait: Bool { self == .portrait || self == .portraitUpsideDown }
+
+    var key: String {
+        switch self {
+        case .landscapeRight: "landscape_right"
+        case .portrait: "portrait"
+        case .landscapeLeft: "landscape_left"
+        case .portraitUpsideDown: "portrait_upside_down"
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .landscapeRight: "landscape →"
+        case .portrait: "portrait"
+        case .landscapeLeft: "← landscape"
+        case .portraitUpsideDown: "portrait ⇅"
+        }
+    }
+
+    /// 着色器里要把屏幕 uv 换成 buffer uv，这跟这里的 screen/buffer 是同一对互逆变换。
+    func screen(_ p: CGPoint) -> CGPoint {
+        switch self {
+        case .landscapeRight: CGPoint(x: p.x, y: p.y)
+        case .portrait: CGPoint(x: 1 - p.y, y: p.x)
+        case .landscapeLeft: CGPoint(x: 1 - p.x, y: 1 - p.y)
+        case .portraitUpsideDown: CGPoint(x: p.y, y: 1 - p.x)
+        }
+    }
+
+    func buffer(_ p: CGPoint) -> CGPoint {
+        switch self {
+        case .landscapeRight: CGPoint(x: p.x, y: p.y)
+        case .portrait: CGPoint(x: p.y, y: 1 - p.x)
+        case .landscapeLeft: CGPoint(x: 1 - p.x, y: 1 - p.y)
+        case .portraitUpsideDown: CGPoint(x: 1 - p.y, y: p.x)
+        }
+    }
+
+    func screen(_ r: CGRect) -> CGRect {
+        let a = screen(CGPoint(x: r.minX, y: r.minY)), b = screen(CGPoint(x: r.maxX, y: r.maxY))
+        return CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
+    }
+
+    /// 相机坐标系里的 (x 偏移, y 偏移, 宽, 高) → 屏幕坐标系：竖屏时屏幕横向是相机的 y 轴。
+    func screenDims(x: Float, y: Float, width: Float, height: Float) -> (x: Float, width: Float, height: Float) {
+        switch self {
+        case .landscapeRight: (x, width, height)
+        case .portrait: (-y, height, width)
+        case .landscapeLeft: (-x, width, height)
+        case .portraitUpsideDown: (y, height, width)
+        }
+    }
+}
+
 struct PipelineSettings: Sendable {
     var matcher = Matcher.sgm
     var lrCheck = true
@@ -60,6 +126,7 @@ struct PipelineSettings: Sendable {
     var flip = false
     var detection = true
     var confidence: Float = 0.5
+    var orient = DisplayOrientation.landscapeRight
     var calibrate = true
 }
 
@@ -121,7 +188,7 @@ final class Pipeline: @unchecked Sendable {
 
     private func finish(_ f: StereoFrame, _ s: PipelineSettings, _ cal: (flip: Bool, dy: Float)?) {
         store.latest = f
-        if s.detection { detector.submit(f.image, minConfidence: s.confidence) }
+        if s.detection { detector.submit(f.image, minConfidence: s.confidence, orientation: s.orient) }
         let det = s.detection ? detector.latest : (seq: -1, items: [])
         let now = CACurrentMediaTime()
         stamps.append(now)
@@ -166,13 +233,19 @@ final class AppModel {
     private(set) var hasExtrinsics = true
     private(set) var K = Intrinsics(fx: 1, fy: 1, cx: 0, cy: 0)
     private(set) var depthSize = CGSize(width: 1, height: 1)
-    private(set) var aspect: CGFloat = 16 / 9
+    /// 相机画面自身的宽高比（永远是横屏的 16:9）。
+    private(set) var frameAspect: CGFloat = 16 / 9
+    /// 屏幕方向：手机怎么拿就转多少（见 DisplayOrientation）。
+    private(set) var orientation = DisplayOrientation.landscapeRight
+    /// 给视图用的宽高比：竖屏时是 frameAspect 的倒数，画面才不会被拉伸。
+    var aspect: CGFloat { orientation.isPortrait ? 1 / frameAspect : frameAspect }
     private(set) var status: String?
     private(set) var tap: CGPoint?
     private(set) var tapDistance: Float?
 
     @ObservationIgnored let pipeline: Pipeline
     @ObservationIgnored let renderer: Renderer
+    @ObservationIgnored private var orientationObservers: [NSObjectProtocol] = []
     let capture = Capture()
     @ObservationIgnored private let camera = CameraController()
 
@@ -192,6 +265,38 @@ final class AppModel {
         camera.onDevices = { engine.configure(wide: $0, ultra: $1) }
         camera.onError = { [weak self] msg in DispatchQueue.main.async { self?.status = msg } }
         pipeline.publish = { [weak self] r in DispatchQueue.main.async { self?.apply(r) } }
+        watchOrientation()
+    }
+
+    /// 用 UIWindowScene.interfaceOrientation 而不是 UIDevice.orientation：前者等于是“界面真正转到哪边了”，
+    /// 系统方向锁打开时它不会变，与屏幕上看到的一致。UIDevice 的通知只用来触发重读。
+    private func watchOrientation() {
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        let c = NotificationCenter.default
+        for name in [UIDevice.orientationDidChangeNotification,
+                     UIApplication.didBecomeActiveNotification,
+                     UIApplication.willEnterForegroundNotification] {
+            orientationObservers.append(c.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.refreshOrientation() }
+            })
+        }
+        refreshOrientation()
+    }
+
+    func refreshOrientation() {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first else { return }
+        let o: DisplayOrientation
+        switch scene.interfaceOrientation {
+        case .portrait: o = .portrait
+        case .portraitUpsideDown: o = .portraitUpsideDown
+        case .landscapeLeft: o = .landscapeLeft
+        case .landscapeRight: o = .landscapeRight
+        default: return
+        }
+        guard o != orientation else { return }
+        orientation = o
+        push { $0.orient = o }
     }
 
     func start() async {
@@ -199,6 +304,7 @@ final class AppModel {
             status = "Camera access denied: enable it in Settings"
             return
         }
+        refreshOrientation()          // 启动时界面方向可能已经定了，补读一次
         UIApplication.shared.isIdleTimerDisabled = true
         setSource(source)
     }
@@ -227,7 +333,6 @@ final class AppModel {
         tap = p
         tapDistance = sampleTap()
     }
-
     func metadata() -> [String: Any] {
         [
             "app": "StereoVision",
@@ -242,6 +347,7 @@ final class AppModel {
             "range_m": [minZ, maxZ],
             "rectification": ["flip": flip, "dy_px": yOffset, "baseline_angle_deg": baselineDeg, "camera_extrinsics": hasExtrinsics],
             "detector": detectorName,
+            "orientation": orientation.key,
         ]
     }
 
@@ -251,9 +357,17 @@ final class AppModel {
         orbit = 1.2
     }
 
+    /// 导出（拍照 / 录像 / 叠加画面）的像素尺寸：长边跟着屏幕的长边走。
+    func outputSize(long: Int) -> (w: Int, h: Int) {
+        let l = max(2, long & ~1)
+        let s = max(2, Int((Double(l) / Double(frameAspect)).rounded()) & ~1)
+        return orientation.isPortrait ? (s, l) : (l, s)
+    }
+
     private func sampleTap() -> Float? {
         guard let tap, let f = pipeline.store.latest else { return nil }
-        return f.sample(CGRect(x: tap.x - 0.012, y: tap.y - 0.02, width: 0.024, height: 0.04), q: 0.5)
+        let p = orientation.buffer(tap)          // 屏幕坐标 -> 相机 buffer 坐标（深度图在 buffer 坐标系里）
+        return f.sample(CGRect(x: p.x - 0.012, y: p.y - 0.02, width: 0.024, height: 0.04), q: 0.5)
     }
 
     private func push(_ change: (inout PipelineSettings) -> Void) {
@@ -269,7 +383,7 @@ final class AppModel {
         hasExtrinsics = r.hasExtrinsics
         K = r.K
         depthSize = r.depthSize
-        if abs(aspect - r.aspect) > 0.01 { aspect = r.aspect }
+        if abs(frameAspect - r.aspect) > 0.01 { frameAspect = r.aspect }
         if let c = r.calibration {
             flip = c.flip
             yOffset = c.dy

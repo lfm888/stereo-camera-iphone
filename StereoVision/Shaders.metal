@@ -4,10 +4,19 @@ using namespace metal;
 struct RectParams { float3x3 M; float2 srcSize; };
 struct MatchParams { int maxDisp; int dir; float uniqueness; float maxCost; };
 struct DepthParams { float fB; float minZ; float maxZ; int pad; };
-struct DisplayParams { int mode; float minZ; float maxZ; float alpha; int hasRight; int hasLabels; int pad0; int pad1; };
+struct DisplayParams { int mode; float minZ; float maxZ; float alpha; int hasRight; int hasLabels; int orient; int pad1; };
 struct PCParams { float4x4 mvp; float fx; float fy; float cx; float cy; float minZ; float maxZ; float pointSize; uint w; uint h; uint step; };
 
 constant float3 kLuma = float3(0.299, 0.587, 0.114);
+
+// 屏幕 uv -> 相机 buffer uv。采集和匹配永远在传感器的横屏坐标系里，手机竖过来时
+// 只是把画面顺时针转 90°（见 DisplayOrientation）。
+inline float2 orientUV(float2 uv, int orient) {
+    if (orient == 1) return float2(uv.y, 1.0 - uv.x);     // portrait
+    if (orient == 2) return float2(1.0 - uv.x, 1.0 - uv.y); // landscape left
+    if (orient == 3) return float2(1.0 - uv.y, uv.x);     // portrait upside down
+    return uv;                                            // landscape right
+}
 
 kernel void rectify(texture2d<float, access::sample> src [[texture(0)]],
                     texture2d<float, access::write> dst [[texture(1)]],
@@ -305,7 +314,7 @@ fragment float4 displayFragment(VOut in [[stage_in]],
                                 constant DisplayParams& p [[buffer(0)]]) {
     constexpr sampler lin(filter::linear, address::clamp_to_edge);
     constexpr sampler near(filter::nearest, address::clamp_to_edge);
-    float2 uv = in.uv;
+    float2 uv = orientUV(in.uv, p.orient);
     float3 c = color.sample(lin, uv).rgb;
     float z = depth.sample(near, uv).r;
     bool valid = z > 0;
@@ -322,12 +331,27 @@ fragment float4 displayFragment(VOut in [[stage_in]],
             return float4(g, g, g, 1);
         }
         case 4: {
-            if (uv.y < 0.25 || uv.y > 0.75) return float4(0.04, 0.04, 0.05, 1);
-            float2 q = float2(fract(uv.x * 2.0), (uv.y - 0.25) * 2.0);
-            float3 img = uv.x < 0.5 ? pair.sample(lin, q).rgb : (p.hasRight ? right.sample(lin, q).rgb : float3(0));
-            float line = fract(q.y * 12.0) < 0.012 ? 1.0 : 0.0;
+            // 两幅配准对：横屏左右并排，竖屏上下并排（每幅按当前方向摆正，留黑边保持比例）
+            bool stack = (p.orient == 1 || p.orient == 3);
+            float2 s = in.uv;
+            float2 q;
+            bool left;
+            if (stack) {
+                if (s.x < 0.25 || s.x > 0.75) return float4(0.04, 0.04, 0.05, 1);
+                q = float2((s.x - 0.25) * 2.0, fract(s.y * 2.0));
+                left = s.y < 0.5;
+            } else {
+                if (s.y < 0.25 || s.y > 0.75) return float4(0.04, 0.04, 0.05, 1);
+                q = float2(fract(s.x * 2.0), (s.y - 0.25) * 2.0);
+                left = s.x < 0.5;
+            }
+            float2 t = orientUV(q, p.orient);
+            float3 img = left ? pair.sample(lin, t).rgb : (p.hasRight ? right.sample(lin, t).rgb : float3(0));
+            // 极线是配准图的每一行（视差只沿 x 搜索）→ 用旋转后的 v 画横线，方向自动正确
+            float line = fract(t.y * 12.0) < 0.012 ? 1.0 : 0.0;
             img = mix(img, float3(0.1, 1.0, 0.35), line * 0.85);
-            if (abs(uv.x - 0.5) < 0.0015) img = float3(1);
+            float split = stack ? abs(s.y - 0.5) : abs(s.x - 0.5);
+            if (split < 0.0015) img = float3(1);
             return float4(img, 1);
         }
         case 5: {

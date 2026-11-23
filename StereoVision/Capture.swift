@@ -29,8 +29,8 @@ final class Capture {
         guard let model else { return nil }
         if photoPending {
             photoPending = false
-            guard let frame = model.pipeline.store.latest,
-                  let pb = Self.buffer(1920, Self.even(1920 / model.aspect)) else { return nil }
+            let (w, h) = model.outputSize(long: 1920)
+            guard let frame = model.pipeline.store.latest, let pb = Self.buffer(w, h) else { return nil }
             let snapshot = Snapshot(frame: frame, depth: frame.depthCopy(), analysis: model.analysis, meta: model.metadata())
             return (pb, { [weak self] in self?.finishPhoto($0, snapshot) })
         }
@@ -44,7 +44,7 @@ final class Capture {
 
     private func startRecording() {
         guard let model else { return }
-        let w = 1280, h = Self.even(1280 / model.aspect)
+        let (w, h) = model.outputSize(long: 1280)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("StereoVision-\(Self.stamp()).mp4")
         do {
             let wr = try AVAssetWriter(outputURL: url, fileType: .mp4)
@@ -141,8 +141,6 @@ final class Capture {
         }
     }
 
-    nonisolated private static func even(_ v: CGFloat) -> Int { Int((v / 2).rounded()) * 2 }
-
     nonisolated static func stamp() -> String {
         let f = DateFormatter()
         f.dateFormat = "yyyyMMdd-HHmmss"
@@ -203,7 +201,7 @@ extension Capture {
         meta["objects"] = s.analysis.objects.map { o -> [String: Any] in
             var d: [String: Any] = ["id": o.id, "label": o.label, "confidence": o.confidence,
                                     "bbox_norm": [o.rect.minX, o.rect.minY, o.rect.width, o.rect.height]]
-            if let z = o.distance { d["distance_m"] = z; d["x_m"] = o.x; d["width_m"] = o.width; d["height_m"] = o.height }
+            if let z = o.distance { d["distance_m"] = z; d["x_m"] = o.x; d["y_m"] = o.y; d["width_m"] = o.width; d["height_m"] = o.height }
             return d
         }
         meta["point_cloud"] = "cloud.ply, camera frame: x right, y down, z forward, meters"

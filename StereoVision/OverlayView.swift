@@ -31,25 +31,32 @@ struct OverlayView: View {
         .allowsHitTesting(false)
     }
 
+    /// 相机 buffer 坐标（归一化）→ 屏幕坐标：手机怎么拿，叠层就跟着转多少。
+    private func view(_ r: CGRect, _ size: CGSize) -> CGRect {
+        let s = model.orientation.screen(r)
+        return CGRect(x: s.minX * size.width, y: s.minY * size.height, width: s.width * size.width, height: s.height * size.height)
+    }
+
     private func object(_ ctx: inout GraphicsContext, _ size: CGSize, _ o: TrackedObject) {
-        let r = CGRect(x: o.rect.minX * size.width, y: o.rect.minY * size.height, width: o.rect.width * size.width, height: o.rect.height * size.height)
+        let r = view(o.rect, size)
         let c = color(o.label)
         if model.showMasks, let m = o.mask {
-            let mr = CGRect(x: m.rect.minX * size.width, y: m.rect.minY * size.height, width: m.rect.width * size.width, height: m.rect.height * size.height)
-            ctx.draw(Image(decorative: m.image, scale: 1), in: mr)
+            // m.image 已经在 Detector 里按屏幕方向转好了，直接填进转好的矩形
+            ctx.draw(Image(decorative: m.image, scale: 1), in: view(m.rect, size))
         }
         ctx.stroke(Path(roundedRect: r, cornerRadius: 4), with: .color(c), lineWidth: 2.5)
         let dist = o.distance.map { String(format: " · %.2f m", $0) } ?? ""
         pill(&ctx, "#\(o.id) \(o.label) \(Int(o.confidence * 100))%\(dist)", at: CGPoint(x: r.minX, y: max(r.minY, 18)), color: c)
         if o.distance != nil {
-            let dims = String(format: "%.0f×%.0f cm · X %+.2f m", o.width * 100, o.height * 100, o.x)
+            let d = model.orientation.screenDims(x: o.x, y: o.y, width: o.width, height: o.height)
+            let dims = String(format: "%.0f×%.0f cm · X %+.2f m", d.width * 100, d.height * 100, d.x)
             pill(&ctx, dims, at: CGPoint(x: r.minX + 2, y: r.maxY - 2), color: .black.opacity(0.6), small: true)
         }
     }
 
     private func blob(_ ctx: inout GraphicsContext, _ size: CGSize, _ b: Blob) {
         guard b.cells >= 80 else { return }
-        let r = CGRect(x: b.rect.minX * size.width, y: b.rect.minY * size.height, width: b.rect.width * size.width, height: b.rect.height * size.height)
+        let r = view(b.rect, size)
         ctx.stroke(Path(r), with: .color(.white.opacity(0.7)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
         pill(&ctx, String(format: "S%d · %.2f m · ⌀%.0f cm", b.id, b.distance, b.width * 100), at: CGPoint(x: r.minX, y: max(r.minY, 18)), color: .black.opacity(0.65), small: true)
     }

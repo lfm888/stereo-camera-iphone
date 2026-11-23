@@ -9,6 +9,7 @@ struct TrackedObject: Identifiable, Sendable {
     var mask: Mask?
     var distance: Float?
     var x: Float = 0
+    var y: Float = 0
     var width: Float = 0
     var height: Float = 0
 }
@@ -83,6 +84,7 @@ final class Analyzer {
         let d: Float = if let p = t.distance, abs(p - z) < 0.4 * p { p + (z - p) * 0.35 } else { z }
         t.distance = d
         t.x = (Float(t.rect.midX) * Float(f.width) - f.K.cx) * d / f.K.fx
+        t.y = (Float(t.rect.midY) * Float(f.height) - f.K.cy) * d / f.K.fy
         t.width = Float(t.rect.width) * Float(f.width) * d / f.K.fx
         t.height = Float(t.rect.height) * Float(f.height) * d / f.K.fy
     }

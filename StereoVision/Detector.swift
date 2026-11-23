@@ -85,7 +85,7 @@ final class Detector: @unchecked Sendable {
         lock.withLock { (seq, results) }
     }
 
-    func submit(_ pb: CVPixelBuffer, minConfidence: Float) {
+    func submit(_ pb: CVPixelBuffer, minConfidence: Float, orientation: DisplayOrientation = .landscapeRight) {
         let go: Bool = lock.withLock {
             if busy { return false }
             busy = true
@@ -96,7 +96,7 @@ final class Detector: @unchecked Sendable {
             let r: [Detection]
             if let request, let net {
                 try? VNImageRequestHandler(cvPixelBuffer: pb, orientation: .up).perform([request])
-                r = decodeSemantic(request, net, minConfidence)
+                r = decodeSemantic(request, net, minConfidence, orientation)
             } else {
                 r = runBuiltin(pb, minConfidence)
             }
@@ -112,7 +112,7 @@ final class Detector: @unchecked Sendable {
         CGRect(x: r.minX, y: 1 - r.maxY, width: r.width, height: r.height)
     }
 
-    private func decodeSemantic(_ req: VNCoreMLRequest, _ net: SegNet, _ minConf: Float) -> [Detection] {
+    private func decodeSemantic(_ req: VNCoreMLRequest, _ net: SegNet, _ minConf: Float, _ orientation: DisplayOrientation) -> [Detection] {
         let arrays = (req.results as? [VNCoreMLFeatureValueObservation] ?? []).compactMap { $0.featureValue.multiArrayValue }
         guard let probs = arrays.first(where: { $0.shape.count == 4 }) else { return [] }
         let c = probs.shape[1].intValue, h = probs.shape[2].intValue, w = probs.shape[3].intValue
@@ -188,7 +188,7 @@ final class Detector: @unchecked Sendable {
                               width: CGFloat(mw) / CGFloat(w), height: CGFloat(mh) / CGFloat(h))
             let label = k - 1 < net.labels.count ? net.labels[k - 1] : "class \(k)"
             out.append(Detection(rect: rect, label: label, confidence: a.sum / Float(a.count),
-                                 mask: Self.makeMask(bits, mw, mh, rect, hue: labelHue(label))))
+                                 mask: Self.makeMask(bits, mw, mh, rect, hue: labelHue(label), orientation: orientation)))
         }
         return out
     }
@@ -208,20 +208,42 @@ final class Detector: @unchecked Sendable {
         return { p.load(fromByteOffset: $0 * 4, as: Float.self) }
     }
 
-    private static func makeMask(_ bits: [UInt8], _ w: Int, _ h: Int, _ rect: CGRect, hue: Double) -> Mask? {
+    private static func makeMask(_ bits: [UInt8], _ w: Int, _ h: Int, _ rect: CGRect, hue: Double,
+                                 orientation: DisplayOrientation) -> Mask? {
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0
         UIColor(hue: hue, saturation: 0.8, brightness: 0.95, alpha: 1).getRed(&r, green: &g, blue: &b, alpha: nil)
         let a: CGFloat = 0.45
         let px = [UInt8(r * a * 255), UInt8(g * a * 255), UInt8(b * a * 255), UInt8(a * 255)]
-        var rgba = [UInt8](repeating: 0, count: w * h * 4)
-        for i in 0..<(w * h) where bits[i] != 0 {
+        // 显示用的图按屏幕方向预先转好（OverlayView 只是把它画进转好的矩形）；
+        // Mask.bits / rect 仍留在相机 buffer 坐标系，测距采样（StereoFrame.sample）不受影响。
+        let d = oriented(bits, w, h, orientation)
+        var rgba = [UInt8](repeating: 0, count: d.w * d.h * 4)
+        for i in 0..<(d.w * d.h) where d.bits[i] != 0 {
             rgba[i * 4] = px[0]; rgba[i * 4 + 1] = px[1]; rgba[i * 4 + 2] = px[2]; rgba[i * 4 + 3] = px[3]
         }
         guard let provider = CGDataProvider(data: Data(rgba) as CFData),
-              let img = CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4,
+              let img = CGImage(width: d.w, height: d.h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: d.w * 4,
                                 space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
                                 provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else { return nil }
         return Mask(rect: rect, w: w, h: h, bits: bits, image: img)
+    }
+
+    /// 把 buffer 坐标系的掩码位图转成屏幕坐标系（与 DisplayOrientation.screen 一致）。
+    private static func oriented(_ bits: [UInt8], _ w: Int, _ h: Int, _ o: DisplayOrientation) -> (bits: [UInt8], w: Int, h: Int) {
+        guard o != .landscapeRight else { return (bits, w, h) }
+        var d = [UInt8](repeating: 0, count: bits.count)
+        for y in 0..<h {
+            for x in 0..<w {
+                let v = bits[y * w + x]
+                switch o {
+                case .landscapeRight: d[y * w + x] = v
+                case .portrait: d[x * h + (h - 1 - y)] = v                 // 顺时针 90°
+                case .landscapeLeft: d[(h - 1 - y) * w + (w - 1 - x)] = v  // 180°
+                case .portraitUpsideDown: d[(w - 1 - x) * h + y] = v        // 逆时针 90°
+                }
+            }
+        }
+        return (d, o.isPortrait ? h : w, o.isPortrait ? w : h)
     }
 
     private func runBuiltin(_ pb: CVPixelBuffer, _ minConf: Float) -> [Detection] {
