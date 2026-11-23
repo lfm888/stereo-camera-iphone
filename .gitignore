@@ -10,5 +10,7 @@ StereoVision/Models/*.mlpackage
 .swiftpm/
 *.ipa
 *.dSYM.zip
+*.mp4
+
 
 __pycache__/
