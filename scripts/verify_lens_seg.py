@@ -27,8 +27,6 @@ import numpy as np
 SCRIPTS = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPTS))
 
-from export_lens_seg import ExportWrapper, find_ckpt, find_segzoo  # noqa: E402
-
 
 def noise(h, w, c):
     """与 export_lens_seg.verify_coreml 完全相同的固定输入：seed 0 的 0~255 像素。"""
@@ -44,6 +42,8 @@ def to_pil(px):
 def dump(args):
     """PyTorch 侧：重建模型 -> 跑固定输入 -> 存 px 与 probs。"""
     import torch
+    # 只在 dump 里 import：export_lens_seg 依赖 torch，而 check 跑在 macOS 上（只装 coremltools）
+    from export_lens_seg import ExportWrapper, find_ckpt, find_segzoo
 
     segzoo = find_segzoo(args.segzoo)
     ckpt = find_ckpt(args.ckpt, segzoo)
