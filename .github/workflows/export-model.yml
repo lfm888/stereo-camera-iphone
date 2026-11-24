@@ -99,7 +99,8 @@ jobs:
           ls -la build/pkg
           SRC=build/pkg
           [ -d build/pkg/lens-seg.mlpackage ] && SRC=build/pkg/lens-seg.mlpackage
-          test -f "$SRC/manifest.plist" || { echo "$SRC is not an mlpackage"; exit 1; }
+          # coremltools 9 写的是 Manifest.json + Data/（新版格式），旧格式是 manifest.plist
+          { [ -f "$SRC/Manifest.json" ] || [ -f "$SRC/manifest.plist" ]; } || { echo "$SRC is not an mlpackage"; ls -la "$SRC"; exit 1; }
           mkdir -p StereoVision/Models
           rm -rf "$MLPACKAGE"
           mkdir -p "$MLPACKAGE"
