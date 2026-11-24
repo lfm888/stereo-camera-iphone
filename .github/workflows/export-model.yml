@@ -59,7 +59,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.2.2" "torchvision==0.17.2"
-          pip install "numpy<2" "coremltools==9.0" pillow \
+          pip install "numpy<2" "coremltools==9.0" pillow "opencv-python-headless" \
                       "segmentation-models-pytorch==0.3.4" "timm==0.9.7" "huggingface_hub<0.26" \
                       ml_collections scipy
           python -c "import coremltools as ct; print('coremltools', ct.__version__)"
