@@ -106,24 +106,26 @@ def check(args):
     h, w, c = px.shape
 
     net = _CpuFallback(args.mlpackage)                # 非 macOS 上这里会抛（没有 CoreML 运行时）
-    ml = net.ml
-    desc = ml.modelDescription
-    meta = dict(ml.user_defined_metadata)            # App 侧读的就是 creator-defined metadata
+    desc = net.ml.get_spec().description
+    meta = dict(net.ml.user_defined_metadata)         # App 侧读的就是 creator-defined metadata
 
     # ---- 契约检查：输入 / 输出 / metadata ----
-    img = next(iter(desc.inputDescriptionsByName.values())).imageConstraint
-    assert img is not None, "输入不是 imageType（App 侧走 VNImageRequestHandler 的 centerCrop）"
-    assert (img.pixelsWide, img.pixelsHigh) == (w, h), \
-        "输入尺寸 %dx%d 与 checkpoint 的 %dx%d 不一致" % (img.pixelsWide, img.pixelsHigh, w, h)
-    out_desc = desc.outputDescriptionsByName["probs"]
-    arr = out_desc.multiArrayType
+    assert len(desc.input) == 1, "应该只有一个输入 image，实际 %s" % [i.name for i in desc.input]
+    inp = desc.input[0]
+    assert inp.type.HasField("imageType"), "输入不是 imageType（App 侧走 VNImageRequestHandler 的 centerCrop）"
+    it = inp.type.imageType
+    assert (it.width, it.height) == (w, h), \
+        "输入尺寸 %dx%d 与 checkpoint 的 %dx%d 不一致" % (it.width, it.height, w, h)
+    out_desc = next(o for o in desc.output if o.name == "probs")
+    arr = out_desc.type.multiArrayType
     shape = tuple(arr.shape) if len(arr.shape) else ()
     assert shape == ref_probs.shape, "输出形状 %s != 参考 %s" % (shape, ref_probs.shape)
     classes = meta.get("classes", "")
     assert classes, "metadata 里没有 classes（App 靠它显示类名）"
     assert len(classes.split(",")) == ref_probs.shape[1], \
         "metadata 的类数 %d 与输出通道 %d 不一致" % (len(classes.split(",")), ref_probs.shape[1])
-    print("[check] 输入 %dx%d imageType  输出 probs %s  类别 %s" % (img.pixelsWide, img.pixelsHigh, shape, classes))
+    print("[check] 输入 %s %dx%d（colorSpace %d）  输出 probs %s  类别 %s" % (
+        inp.name, it.width, it.height, it.colorSpace, shape, classes))
     print("[check] metadata: %s" % {k: meta[k] for k in ("img_size", "num_classes", "norm", "mean", "std") if k in meta})
 
     # ---- 数值对拍 ----

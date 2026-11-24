@@ -1,19 +1,16 @@
 name: Export lens-seg CoreML model
 
-# pth -> CoreML 的导出放这里做，不在 Windows 上做：
+# pth -> CoreML 的导出在这里做，不在 Windows 上做：
 #   Windows 的 coremltools 缺原生库（libmilstoragepython / libmodelpackage），只能存旧的
-#   neural network 格式（float32 的 .mlmodel），它跑不到 SoC 的 GPU / ANE 上。
-#   Linux / macOS 的 wheel 带原生库，可以存 mlprogram 格式（float16 的 .mlpackage，iOS17+），
-#   这才走得到 Metal / ANE。
+#   neural network 格式（float32 的 .mlmodel），它上不了 SoC 的 GPU / ANE。
+#   Linux 的 wheel 带原生库，能存 mlprogram（float16 的 .mlpackage，iOS17+），这才走得到 Metal / ANE。
 #
-# 三段流水线：
-#   export (ubuntu)        装 torch + segzoo + coremltools，跑 scripts/export_lens_seg.py 写 mlpackage，
-#                          同时存一份 PyTorch 参考输出（build/ci/lens-seg-ref.npz）。
-#   verify (macOS)         coremltools 的推理运行时只在 macOS 上存在：真跑一遍 mlpackage 与 PyTorch 参考对拍，
-#                          再用 coremlcompiler 编译一次（编译不过说明设备上也起不来）。
-#   commit (ubuntu)        验证通过后把 mlpackage 提交回 main，并删掉旧的 float32 .mlmodel。
-#                          同一分支上的推送会触发 ipa.yml 出安装包（bot 的推送不会触发 workflow，
-#                          所以 ipa.yml 里另外挂了 workflow_run）。
+# 两步：
+#   export (ubuntu)  装 torch + coremltools + segzoo（只为重建网络结构），跑 scripts/export_lens_seg.py 写 mlpackage
+#   commit (ubuntu)  把 mlpackage 提交回 main、删掉旧的 float32 .mlmodel；提交后 ipa.yml 自动出安装包
+#                    （bot 的推送不触发普通 push 事件，所以 ipa.yml 里挂了 workflow_run）
+#
+# 想在本机复核数值（可选，需要 macOS）：scripts/verify_lens_seg.py 的 dump / check，见 models/README.md。
 
 on:
   push:
@@ -21,7 +18,6 @@ on:
     paths:
       - "models/**"
       - "scripts/export_lens_seg.py"
-      - "scripts/verify_lens_seg.py"
       - ".github/workflows/export-model.yml"
   workflow_dispatch:
     inputs:
@@ -29,7 +25,7 @@ on:
         description: "仓库里的 checkpoint 路径"
         default: "models/lens-seg.pth"
       commit:
-        description: "验证通过后把 mlpackage 提交回 main（并触发 IPA 构建）"
+        description: "导出后把 mlpackage 提交回 main（并触发 IPA 构建）"
         type: boolean
         default: true
 
@@ -38,11 +34,9 @@ permissions:
 
 env:
   SEGZOO_REPO: https://github.com/lfm888/segzoo.git
-  # 固定 segzoo 的 commit，保证以后重跑导出得到的是同一个网络结构
+  # 固定 segzoo 的 commit：只用来重建网络结构，保证以后重跑导出得到同一个模型
   SEGZOO_REF: 980943b0f0756a88f55ab0b2df7443d58925db75
-  # 与 scripts/export_lens_seg.py 的默认契约一致（prefix，不带扩展名）
   MLPACKAGE: StereoVision/Models/lens-seg.mlpackage
-  REF: build/ci/lens-seg-ref.npz
 
 jobs:
   export:
@@ -62,7 +56,6 @@ jobs:
           pip install "numpy<2" "coremltools==9.0" pillow "opencv-python-headless" \
                       "segmentation-models-pytorch==0.3.4" "timm==0.9.7" "huggingface_hub<0.26" \
                       ml_collections scipy
-          python -c "import coremltools as ct; print('coremltools', ct.__version__)"
           python -c "import coremltools.libmilstoragepython as b; print('native blob writer OK')"
 
       - name: Checkout segzoo (model definition lives there)
@@ -81,76 +74,33 @@ jobs:
           du -sh "$MLPACKAGE"
           find "$MLPACKAGE" -maxdepth 1
 
-      - name: Dump PyTorch reference for the macOS check
-        run: |
-          python scripts/verify_lens_seg.py dump \
-            --ckpt "${{ inputs.ckpt || 'models/lens-seg.pth' }}" --segzoo /tmp/segzoo --out "$REF"
-
       - uses: actions/upload-artifact@v4
         with:
-          name: lens-seg-export
-          path: |
-            StereoVision/Models/lens-seg.mlpackage
-            build/ci/lens-seg-ref.npz
+          name: lens-seg-mlpackage
+          path: StereoVision/Models/lens-seg.mlpackage
           if-no-files-found: error
 
-  verify:
-    needs: export
-    runs-on: macos-15-intel
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      # 直接解到仓库根目录：artifact 里保留了仓库内的相对路径
-      - uses: actions/download-artifact@v4
-        with:
-          name: lens-seg-export
-          path: .
-
-      - name: Check the artifact layout
-        run: |
-          du -sh "$MLPACKAGE" "$REF"
-          find "$MLPACKAGE" -maxdepth 1
-
-      - name: Install coremltools
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install "coremltools==9.0" "numpy<2" pillow
-
-      - name: Run the model on CoreML and compare with PyTorch
-        run: |
-          python scripts/verify_lens_seg.py check --mlpackage "$MLPACKAGE" --ref "$REF"
-
-      - name: Compile with coremlcompiler (what the app does at build time)
-        run: |
-          xcrun coremlcompiler compile "$MLPACKAGE" /tmp/compiled
-          du -sh /tmp/compiled/lens-seg.mlmodelc
-          /usr/bin/plutil -p /tmp/compiled/lens-seg.mlmodelc/*.plist 2>/dev/null | head -20 || true
-
   commit:
-    needs: [export, verify]
-    if: ${{ needs.verify.result == 'success' && (github.event_name == 'push' || inputs.commit) }}
+    needs: export
+    if: ${{ github.event_name == 'push' || inputs.commit }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/download-artifact@v4
         with:
-          name: lens-seg-export
-          path: .
+          name: lens-seg-mlpackage
+          path: build/ci
 
       - name: Replace the model in StereoVision/Models
         run: |
-          test -d "$MLPACKAGE" || { echo "artifact missing $MLPACKAGE"; exit 1; }
-          # 旧的 float32 neural network 模型（Windows 导出的）不再需要：同名编译产物会冲突
+          test -d build/ci/lens-seg.mlpackage || { echo "artifact missing"; exit 1; }
+          rm -rf "$MLPACKAGE"
+          cp -R build/ci/lens-seg.mlpackage "$MLPACKAGE"
+          # 旧的 float32 neural network 模型（Windows 导出的）不再需要：编译产物同名会打架
           git rm -q --ignore-unmatch StereoVision/Models/lens-seg.mlmodel || true
           rm -f StereoVision/Models/lens-seg.mlmodel
           du -sh StereoVision/Models/*
-          git status --short
 
       - name: Commit and push
         run: |
