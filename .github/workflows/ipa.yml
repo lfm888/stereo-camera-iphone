@@ -7,6 +7,10 @@ on:
         description: "Bundle the YOLO11n-seg CoreML model (exported on Linux, ~6 min extra)"
         type: boolean
         default: false
+  # 模型由 export-model.yml 导出并提交（bot 的推送不会触发普通 push 事件，所以在这里挂 workflow_run）
+  workflow_run:
+    workflows: ["Export lens-seg CoreML model"]
+    types: [completed]
   push:
     branches: [main]
     paths:
@@ -50,7 +54,8 @@ jobs:
 
   build:
     needs: [model]
-    if: ${{ !cancelled() && needs.model.result != 'failure' }}
+    if: ${{ !cancelled() && needs.model.result != 'failure'
+         && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success') }}
     # macOS *arm64* hosted runners (macos-15 / macos-26) are capacity constrained and often never
     # get assigned; the x64 image (macos-15-intel) is not, and produces the same arm64 iOS binary.
     runs-on: macos-15-intel

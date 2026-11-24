@@ -18,7 +18,7 @@
 >
 > 竖屏下 *Rectified pair* 改成上下并排；`meta.json` 里的物体宽高与 x 偏移仍是**相机坐标系**（x 沿传感器长边，即竖屏时对应屏幕竖向），并额外写入 `orientation` 字段。
 
-StereoVision 把 iPhone 的后置双摄（广角 + 超广角）变成一台实时的**立体相机**：测出物体的远近，用自己训练的语义分割模型识别并勾出物体轮廓（当前模型的分割目标是 `Lens`），并用 9 种方式呈现场景，从经典深度图到可以拖动旋转的 3D 点云。
+StereoVision 把 iPhone 的后置双摄（广角 + 超广角）变成一台实时的**立体相机**：测出物体的远近，用自己训练的语义分割模型识别并勾出物体轮廓（当前模型的分割目标是 `glasses`），并用 9 种方式呈现场景，从经典深度图到可以拖动旋转的 3D 点云。
 
 > **已在 iPhone 16 与 iPhone 15 Plus 上测试。** 只要 iPhone 有「广角 + 超广角」后置双摄就能跑，与两颗镜头的排布无关：程序会读取这对镜头的外参，因此竖排（iPhone 16）、对角（iPhone 13–15）或水平排布都能被正确配准。相机格式、标定与帧率可能因机型而异。LiDAR 数据源尚未在真机上运行过。
 
@@ -29,7 +29,7 @@ StereoVision 把 iPhone 的后置双摄（广角 + 超广角）变成一台实�
 ## 功能
 
 - **实时深度**：在 iPhone 16 上约 20+ fps
-- **目标检测与分割**：用自己训练的语义分割模型（`lens-seg`：YOLO11n 骨干 + 轻量语义头，256×256，2 类 `background` / `Lens`）。喂图前先把画面按当前方向转正，再取**长宽 min 为边长的中央正方形**缩到 256×256（训练样本是正方的，整幅拉伸会把镜头拉变形），分割结果变成带类别、置信度、彩色掩码的物体，并跨帧跟随（同一类的碎片会合并成一个物体）
+- **目标检测与分割**：用自己训练的语义分割模型（`lens-seg`：YOLO11n 骨干 + 轻量语义头，256×256，2 类 `background` / `glasses`）。喂图前先把画面按当前方向转正，再取**长宽 min 为边长的中央正方形**缩到 256×256（训练样本是正方的，整幅拉伸会把镜头拉变形），分割结果变成带类别、置信度、彩色掩码的物体，并跨帧跟随（同一类的碎片会合并成一个物体）
 - **尺寸测量**：每个物体给出距离、横向偏移和近似宽 × 高（cm）
 - **点选测距**：点屏幕上任意一点即可测距；准星始终显示画面中心的距离
 - **三种深度来源**：自研立体匹配（默认）、Apple 的 Dual-Wide 深度、以及 iPhone Pro（12 Pro 及以后）上的 LiDAR。没有该传感器的机型不会出现 LiDAR 选项。LiDAR 用激光飞行时间直接测距，在立体视觉失效的无纹理墙面上也能工作，量程约 5 m，因此很适合作为评估立体匹配的真值
@@ -149,21 +149,21 @@ $$\Delta Z \approx \frac{Z^2}{f \cdot B}\,\Delta d$$
 
 ## 快速开始
 
-环境要求：具备 Dual-Wide 摄像头的 iPhone、iOS 18+、Xcode 26+（含 Metal Toolchain：`xcodebuild -downloadComponent MetalToolchain`），以及用来导出分割模型的 Python（torch + coremltools + segzoo 仓库的依赖，推荐直接用 segzoo 训练时那套 conda 环境）。
+环境要求：具备 Dual-Wide 摄像头的 iPhone、iOS 18+、Xcode 26+（含 Metal Toolchain：`xcodebuild -downloadComponent MetalToolchain`）。分割模型已经提交在仓库里，不装 Python 也能直接编译运行；只有自己想在本机重导模型时才需要 Python（macOS / Linux + torch + coremltools + segzoo 的依赖）。
 
 ```sh
 git clone <repo> && cd stereo-camera-iphone
 cp Config/Local.xcconfig.example Config/Local.xcconfig   # 填入你的 Apple team ID 和唯一的 bundle id
-python scripts/export_lens_seg.py \
-    --ckpt <segzoo>/runs/lens_dataset/yolo11_n_256x256/best.pth --segzoo <segzoo>   # best.pth -> CoreML
 open StereoVision.xcodeproj                              # 在你的 iPhone 上运行
 ```
+
+分割模型（`StereoVision/Models/lens-seg.mlpackage`）已经提交在仓库里，直接编译就能用。要换模型，把 `models/lens-seg.pth` 换成新的 segzoo `best.pth` 推上去即可：`.github/workflows/export-model.yml` 会在 Linux（torch + coremltools，写 mlpackage）和 macOS（真 CoreML 运行时对拍 + `coremlcompiler` 编译）上导出并验证，通过后自动提交模型与新的安装包，细节见 [`models/README.md`](models/README.md)。
 
 `scripts/export_lens_seg.py` 读的是 segzoo 的 `best.pth`：里面只有 `state_dict` 和描述结构的 `meta`（arch / encoder / num_classes / img_size / 归一化），所以要靠 segzoo 的 `models.load_checkpoint()` 重建网络，再用 coremltools 导出。导出的模型把“/255 + 归一化 + softmax”都写进了图里，类名、输入尺寸、归一化参数写进 CoreML metadata，App 侧不硬编码任何类别（换数据集重训后只要重新导一次模型，同一个 App 就能跑）。
 
 App 侧的预处理与训练一致：`VNImageRequestHandler` 先按屏幕方向把 buffer 转正，`imageCropAndScaleOption = .centerCrop` 取边长 = `min(宽, 高)` 的中央正方形，再等比缩到模型输入；掩码会按“裁剪偏移 + 方向”换回相机坐标系，所以测距和叠层仍然对齐。
 
-在 macOS / Linux 上脚本导出 float16 的 `.mlpackage`；Windows 上的 coremltools 缺原生库，会自动回退成 float32 的 `.mlmodel`——两者都会被 `project.yml` 的 preBuild 编译成 `lens-seg.mlmodelc`，App 侧无差别。
+**为什么导出不能放在 Windows 上：** Windows 的 coremltools 缺原生库（`libmilstoragepython` / `libmodelpackage`），写不了 `mlpackage`，只能回退成 float32 的 neural network `.mlmodel`——那种格式在 iPhone 上跑不到 GPU / ANE，只能吃 CPU。Linux / macOS 的 coremltools wheel 带原生库，可以存 **mlprogram / float16 的 `.mlpackage`（iOS17+）**，Core ML 才会把它调度到 Metal 与神经引擎上；这也是 CI 里的导出路径。
 
 没有模型也能用，此时会退回到 Apple 自带的检测器（人、动物、显著物体）。手机**竖着、横着都能用**：竖着（灵动岛朝上）或者两个横屏方向都行，画面、掩码、点云都保持正立；iPhone 16 横屏时请让灵动岛朝左（这是传感器自然方向），其它情况由显示层自动旋转。
 
