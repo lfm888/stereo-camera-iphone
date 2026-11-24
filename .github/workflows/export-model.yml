@@ -87,18 +87,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 单个目录做 artifact 时，里面存的是目录内容（manifest.plist / data/...），所以解到 build/pkg
       - uses: actions/download-artifact@v4
         with:
           name: lens-seg-mlpackage
-          path: build/ci
+          path: build/pkg
 
       - name: Replace the model in StereoVision/Models
         run: |
-          find build/ci -maxdepth 4 -name "*.mlpackage" -type d
-          SRC=$(find build/ci -name "lens-seg.mlpackage" -type d | head -1)
-          test -n "$SRC" || { echo "artifact missing lens-seg.mlpackage"; exit 1; }
+          ls -la build/pkg
+          SRC=build/pkg
+          [ -d build/pkg/lens-seg.mlpackage ] && SRC=build/pkg/lens-seg.mlpackage
+          test -f "$SRC/manifest.plist" || { echo "$SRC 不是 mlpackage（没有 manifest.plist）"; exit 1; }
           rm -rf "$MLPACKAGE"
-          cp -R "$SRC" "$MLPACKAGE"
+          mkdir -p "$MLPACKAGE"
+          cp -R "$SRC"/. "$MLPACKAGE"/
           # 旧的 float32 neural network 模型（Windows 导出的）不再需要：编译产物同名会打架
           git rm -q --ignore-unmatch StereoVision/Models/lens-seg.mlmodel || true
           rm -f StereoVision/Models/lens-seg.mlmodel
