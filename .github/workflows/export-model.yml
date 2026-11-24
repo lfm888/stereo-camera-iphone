@@ -94,9 +94,11 @@ jobs:
 
       - name: Replace the model in StereoVision/Models
         run: |
-          test -d build/ci/lens-seg.mlpackage || { echo "artifact missing"; exit 1; }
+          find build/ci -maxdepth 4 -name "*.mlpackage" -type d
+          SRC=$(find build/ci -name "lens-seg.mlpackage" -type d | head -1)
+          test -n "$SRC" || { echo "artifact missing lens-seg.mlpackage"; exit 1; }
           rm -rf "$MLPACKAGE"
-          cp -R build/ci/lens-seg.mlpackage "$MLPACKAGE"
+          cp -R "$SRC" "$MLPACKAGE"
           # 旧的 float32 neural network 模型（Windows 导出的）不再需要：编译产物同名会打架
           git rm -q --ignore-unmatch StereoVision/Models/lens-seg.mlmodel || true
           rm -f StereoVision/Models/lens-seg.mlmodel
