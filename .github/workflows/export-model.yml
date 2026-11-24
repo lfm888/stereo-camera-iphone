@@ -14,7 +14,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "models/**"
+      - "models/*.pth"
       - "scripts/export_lens_seg.py"
       - ".github/workflows/export-model.yml"
   workflow_dispatch:

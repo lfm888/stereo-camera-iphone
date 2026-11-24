@@ -149,7 +149,7 @@ $$\Delta Z \approx \frac{Z^2}{f \cdot B}\,\Delta d$$
 
 ## 快速开始
 
-环境要求：具备 Dual-Wide 摄像头的 iPhone、iOS 18+、Xcode 26+（含 Metal Toolchain：`xcodebuild -downloadComponent MetalToolchain`）。分割模型已经提交在仓库里，不装 Python 也能直接编译运行；只有自己想在本机重导模型时才需要 Python（macOS / Linux + torch + coremltools + segzoo 的依赖）。
+环境要求：具备 Dual-Wide 摄像头的 iPhone、iOS 18+、Xcode 26+（含 Metal Toolchain：`xcodebuild -downloadComponent MetalToolchain`）。本机编译不需要 Python（仓库里带着已经导好的模型）；只有自己想重导模型时才需要（macOS / Linux + torch + coremltools + segzoo 的依赖）。
 
 ```sh
 git clone <repo> && cd stereo-camera-iphone
@@ -157,7 +157,7 @@ cp Config/Local.xcconfig.example Config/Local.xcconfig   # 填入你的 Apple te
 open StereoVision.xcodeproj                              # 在你的 iPhone 上运行
 ```
 
-分割模型（`StereoVision/Models/lens-seg.mlpackage`）已经提交在仓库里，直接编译就能用。要换模型，把 `models/lens-seg.pth` 换成新的 segzoo `best.pth` 推上去即可：`.github/workflows/export-model.yml` 会在 Linux（torch + coremltools，写 mlpackage）和 macOS（真 CoreML 运行时对拍 + `coremlcompiler` 编译）上导出并验证，通过后自动提交模型与新的安装包，细节见 [`models/README.md`](models/README.md)。
+要换模型，把 `models/lens-seg.pth` 换成新的 segzoo `best.pth` 推上去即可：`.github/workflows/export-model.yml` 会在 Linux 上导出 mlpackage（torch + coremltools），再到 macOS 上用 `coremlcompiler` 编译并打出未签名 IPA，artifact 里直接拿安装包，细节见 [`models/README.md`](models/README.md)。
 
 `scripts/export_lens_seg.py` 读的是 segzoo 的 `best.pth`：里面只有 `state_dict` 和描述结构的 `meta`（arch / encoder / num_classes / img_size / 归一化），所以要靠 segzoo 的 `models.load_checkpoint()` 重建网络，再用 coremltools 导出。导出的模型把“/255 + 归一化 + softmax”都写进了图里，类名、输入尺寸、归一化参数写进 CoreML metadata，App 侧不硬编码任何类别（换数据集重训后只要重新导一次模型，同一个 App 就能跑）。
 
