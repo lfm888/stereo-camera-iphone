@@ -1,16 +1,14 @@
-name: Export lens-seg CoreML model
+name: Build IPA with a freshly exported model
 
-# pth -> CoreML 的导出在这里做，不在 Windows 上做：
-#   Windows 的 coremltools 缺原生库（libmilstoragepython / libmodelpackage），只能存旧的
-#   neural network 格式（float32 的 .mlmodel），它上不了 SoC 的 GPU / ANE。
-#   Linux 的 wheel 带原生库，能存 mlprogram（float16 的 .mlpackage，iOS17+），这才走得到 Metal / ANE。
+# pth -> CoreML -> 未签名 IPA，全程在 Actions 里做，不往仓库回写任何模型文件。
 #
-# 两步：
-#   export (ubuntu)  装 torch + coremltools + segzoo（只为重建网络结构），跑 scripts/export_lens_seg.py 写 mlpackage
-#   commit (ubuntu)  把 mlpackage 提交回 main、删掉旧的 float32 .mlmodel；提交后 ipa.yml 自动出安装包
-#                    （bot 的推送不触发普通 push 事件，所以 ipa.yml 里挂了 workflow_run）
+# 为什么导出要放在这里而不是 Windows：Windows 的 coremltools 缺原生库
+# （libmilstoragepython / libmodelpackage），只能存旧的 neural network 格式（float32 的 .mlmodel），
+# 它在 iPhone 上只能吃 CPU。Linux 的 coremltools wheel 带原生库，能存 mlprogram（float16 的 .mlpackage，
+# iOS17+），Core ML 才会把它调度到 Metal / 神经引擎上。
 #
-# 想在本机复核数值（可选，需要 macOS）：scripts/verify_lens_seg.py 的 dump / check，见 models/README.md。
+#   export (ubuntu)          装 torch + coremltools + segzoo（只为重建网络结构），跑 scripts/export_lens_seg.py 写 mlpackage
+#   ipa    (macos-15-intel)  把 mlpackage 放进 StereoVision/Models/，xcodebuild 出未签名 IPA 并上传 artifact
 
 on:
   push:
@@ -24,13 +22,9 @@ on:
       ckpt:
         description: "仓库里的 checkpoint 路径"
         default: "models/lens-seg.pth"
-      commit:
-        description: "导出后把 mlpackage 提交回 main（并触发 IPA 构建）"
-        type: boolean
-        default: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   SEGZOO_REPO: https://github.com/lfm888/segzoo.git
@@ -80,42 +74,73 @@ jobs:
           path: StereoVision/Models/lens-seg.mlpackage
           if-no-files-found: error
 
-  commit:
+  ipa:
     needs: export
-    if: ${{ github.event_name == 'push' || inputs.commit }}
-    runs-on: ubuntu-latest
+    # macOS arm64 的托管 runner 容量紧张，常常排不到；x64 镜像出的是同样的 arm64 iOS 二进制
+    runs-on: macos-15-intel
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      # 单个目录做 artifact 时，里面存的是目录内容（manifest.plist / data/...），所以解到 build/pkg
+      - name: Show toolchain
+        run: |
+          uname -m
+          xcodebuild -version
+          xcrun --find coremlcompiler
+
+      # 单个目录做 artifact 时里面存的是目录内容（manifest.plist / data/...），所以解到 build/pkg
       - uses: actions/download-artifact@v4
         with:
           name: lens-seg-mlpackage
           path: build/pkg
 
-      - name: Replace the model in StereoVision/Models
+      - name: Put the model where the Xcode preBuild script finds it
         run: |
           ls -la build/pkg
           SRC=build/pkg
           [ -d build/pkg/lens-seg.mlpackage ] && SRC=build/pkg/lens-seg.mlpackage
-          test -f "$SRC/manifest.plist" || { echo "$SRC 不是 mlpackage（没有 manifest.plist）"; exit 1; }
+          test -f "$SRC/manifest.plist" || { echo "$SRC is not an mlpackage"; exit 1; }
+          mkdir -p StereoVision/Models
           rm -rf "$MLPACKAGE"
           mkdir -p "$MLPACKAGE"
           cp -R "$SRC"/. "$MLPACKAGE"/
-          # 旧的 float32 neural network 模型（Windows 导出的）不再需要：编译产物同名会打架
-          git rm -q --ignore-unmatch StereoVision/Models/lens-seg.mlmodel || true
+          # 仓库里那个 Windows 导出的 float32 .mlmodel 留着不影响（preBuild 优先编译 mlpackage），
+          # 但为了不混淆，这里删掉，只编译本次导出的 mlpackage
           rm -f StereoVision/Models/lens-seg.mlmodel
           du -sh StereoVision/Models/*
 
-      - name: Commit and push
+      - name: Build (no code signing)
         run: |
-          CKPT="${{ inputs.ckpt || 'models/lens-seg.pth' }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A StereoVision/Models
-          if git diff --cached --quiet; then
-            echo "模型没有变化，不提交"
-            exit 0
-          fi
-          git commit -m "model: lens-seg 换成 CI 导出的 mlprogram（float16，GPU/ANE），源 $(basename "$CKPT") $(sha256sum "$CKPT" | cut -c1-12)"
-          git push
+          set -o pipefail
+          xcodebuild \
+            -project StereoVision.xcodeproj \
+            -scheme StereoVision \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/dd \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            ONLY_ACTIVE_ARCH=NO \
+            build > /tmp/build.log 2>&1 || { tail -80 /tmp/build.log; exit 1; }
+          grep -E "coremlcompiler|lens-seg|BUILD SUCCEEDED|error:" /tmp/build.log | head -20 || true
+          tail -5 /tmp/build.log
+
+      - name: Package unsigned IPA
+        run: |
+          APP="build/dd/Build/Products/Release-iphoneos/StereoVision.app"
+          test -d "$APP" || { echo "app not found"; exit 1; }
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$APP/Info.plist"
+          find "$APP" -maxdepth 1 -name "*.mlmodelc" -exec du -sh {} \;
+          rm -rf Payload && mkdir -p Payload && cp -R "$APP" Payload/
+          zip -qry StereoVision-unsigned.ipa Payload
+          ls -lh StereoVision-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: StereoVision-unsigned-ipa
+          path: StereoVision-unsigned.ipa
+          if-no-files-found: error
