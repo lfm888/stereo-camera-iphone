@@ -378,6 +378,8 @@ float sv_depth_quantile(const float* depth, int stride, int w, int h,
 - 修改代码时给**完整的文件版本**，并加必要的注释。
 - 给 Python 脚本时，**所有命令行参数都要有默认值，集中放在文件里的 `DEFAULTS` 字典**，直接运行不用输参数（原来的 `--xxx` 仍可覆盖）。
 - 回复使用中文。
+- **每次 CI 打包成功后，立即跑 `./scripts/fetch_ipa.sh` 把 IPA 下载到 `build/StereoVision-unsigned.ipa`**，
+  并在回复里报出文件大小与 sha256（不要只给 Actions 链接）。
 
 
 ---
