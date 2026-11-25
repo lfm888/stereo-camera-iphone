@@ -14,7 +14,6 @@
 		4A938EB4B82503C00D57E3D0 /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E56DA7BD05E72209317257A2 /* AppModel.swift */; };
 		6D6FF7A50EAA907EE3B1FD83 /* Capture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1921C3786C3FB672A67C7E9B /* Capture.swift */; };
 		7021D3F748CDFD42D14E7E53 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = 6E909856B28ECAC981F8F9C1 /* Shaders.metal */; };
-		A49497550BC6E9443FB9B8E1 /* Detector.swift in Sources */ = {isa = PBXBuildFile; fileRef = A9BBCF19E1F51DA8A81E2D8E /* Detector.swift */; };
 		C00FAEBD9221E735877A6B2B /* Analyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3184CAD436EB2D31EDFD80E /* Analyzer.swift */; };
 		CD63C1D3316EB9A56D11FB12 /* CameraController.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3911430056B77D868328295 /* CameraController.swift */; };
 		DFDE90D557B69AC5674000A7 /* Renderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8C866D86415300FAB186B5D /* Renderer.swift */; };
@@ -25,7 +24,6 @@
 		2DA425104A6DE48AF50AE289 /* OverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayView.swift; sourceTree = "<group>"; };
 		6E909856B28ECAC981F8F9C1 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
 		9FBEB6373DDF5AFD89798702 /* StereoEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StereoEngine.swift; sourceTree = "<group>"; };
-		A9BBCF19E1F51DA8A81E2D8E /* Detector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Detector.swift; sourceTree = "<group>"; };
 		AF78EAB8BCDBF65A25A5D815 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		BF3515D6B6BAC0E6EBA32614 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Base.xcconfig; sourceTree = "<group>"; };
 		D3184CAD436EB2D31EDFD80E /* Analyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Analyzer.swift; sourceTree = "<group>"; };
@@ -46,7 +44,6 @@
 				F3911430056B77D868328295 /* CameraController.swift */,
 				1921C3786C3FB672A67C7E9B /* Capture.swift */,
 				AF78EAB8BCDBF65A25A5D815 /* ContentView.swift */,
-				A9BBCF19E1F51DA8A81E2D8E /* Detector.swift */,
 				2DA425104A6DE48AF50AE289 /* OverlayView.swift */,
 				D8C866D86415300FAB186B5D /* Renderer.swift */,
 				6E909856B28ECAC981F8F9C1 /* Shaders.metal */,
@@ -87,7 +84,6 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = CDDD9B713AF75444BF35DEC2 /* Build configuration list for PBXNativeTarget "StereoVision" */;
 			buildPhases = (
-				5AA7DE10E3D1E70A9B6EAAEF /* Compile CoreML models */,
 				1A6D2965C037B38A159E3D4D /* Sources */,
 				3D19F3DDE1BE765248F94D4E /* Resources */,
 			);
@@ -147,27 +143,6 @@
 		};
 /* End PBXResourcesBuildPhase section */
 
-/* Begin PBXShellScriptBuildPhase section */
-		5AA7DE10E3D1E70A9B6EAAEF /* Compile CoreML models */ = {
-			isa = PBXShellScriptBuildPhase;
-			alwaysOutOfDate = 1;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-			);
-			name = "Compile CoreML models";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "D=\"$SRCROOT/StereoVision/Models\"\nFOUND=0\nfor M in \"$D\"/*.mlpackage \"$D\"/*.mlmodel; do\n  [ -e \"$M\" ] || continue\n  case \"$M\" in *.mlmodel) [ -e \"${M%.mlmodel}.mlpackage\" ] && continue ;; esac\n  FOUND=1\n  xcrun coremlcompiler compile \"$M\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\" > /dev/null\ndone\nif [ \"$FOUND\" = 0 ]; then\n  echo \"warning: no model in StereoVision/Models, falling back to Vision built-in detection. Run scripts/export_lens_seg.sh\"\nfi\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		1A6D2965C037B38A159E3D4D /* Sources */ = {
@@ -179,7 +154,6 @@
 				CD63C1D3316EB9A56D11FB12 /* CameraController.swift in Sources */,
 				6D6FF7A50EAA907EE3B1FD83 /* Capture.swift in Sources */,
 				3C6B87A0F806359E573EF930 /* ContentView.swift in Sources */,
-				A49497550BC6E9443FB9B8E1 /* Detector.swift in Sources */,
 				303596F04684BEEC1FD9B97E /* OverlayView.swift in Sources */,
 				DFDE90D557B69AC5674000A7 /* Renderer.swift in Sources */,
 				7021D3F748CDFD42D14E7E53 /* Shaders.metal in Sources */,
@@ -196,7 +170,7 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CLANG_CXX_LIBRARY = "libc++";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
@@ -316,7 +290,7 @@
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ANALYZER_NONNULL = YES;
 				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CLANG_CXX_LIBRARY = "libc++";
 				CLANG_ENABLE_MODULES = YES;
 				CLANG_ENABLE_OBJC_ARC = YES;
