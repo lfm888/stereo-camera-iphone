@@ -675,3 +675,60 @@ cmake --build build/core --config Release
 | `core/tests/golden_main.cpp` | 新增 | 12 项逐位对拍 + 标量基准 |
 | `core/tests/golden/*.npy` | 新增 | tiny 向量（0.28 MB，提交） |
 | `.gitignore` | 修改 | 忽略 `core/tests/golden-small/`、`golden-full/` |
+
+---
+
+# 16. P0 执行记录（agent）
+
+按 §15.4 执行，`test` 分支上 4 个提交。**没有 Mac，Swift 部分未编译过**——
+只能做静态核对（符号引用、括号配平、跨文件依赖），编译错误要由 CI 暴露。
+
+## 16.1 已完成的删除
+
+| 动作 | 提交 | 说明 |
+|---|---|---|
+| 删 `Bird's-eye` | `0e0ffd0` | `ViewMode.radar`、`OverlayView.radar()`、`Analysis.scan`、`Analyzer.grid()` 的剖面计算 |
+| `shaderIndex` 改成显式映射 | `0e0ffd0` | 原来 `min(rawValue, 7)` 靠 radar 恰好占 7 才凑对 |
+| 删语义分割推理链路 | `0e0ffd0` | `Detector.swift`、`Mask`、`Detection`、`TrackedObject`、`StereoFrame.sample(_ m: Mask)`、`Analyzer.associate/measure`、`labelHue`、`iou`、`screenDims`、`visionOrientation` |
+| 删 UI 相关项 | `0e0ffd0` | 侧栏 Detection 按钮、设置页「Object detection」分区、物体框/掩码叠层、`showMasks`/`confidence`/`detection`/`detectorName` |
+| 删模型文件与流水线 | `d8e6ca3` | `StereoVision/Models/`、`models/`、`scripts/export_lens_seg.*`、`export-model.yml`、`project.yml` 的 preBuildScripts |
+
+**保留**：`3D segmentation`（`.segmentation`）、`Analyzer.grid()` 的连通域与标签图、
+`StereoFrame.sample(_ r: CGRect, q:)`（点选测距/准星）、三种深度来源、点云、拍照录像与导出。
+
+## 16.2 顺带修掉的问题
+
+- `ViewMode.shaderIndex` 的隐式 `rawValue` 依赖（见 §15.2 Q4 的坑）。
+- `ipa.yml`：`paths` 加 `core/**`，`branches` 加 `test`；`fetch_ipa.sh` 默认 workflow 改成 `Build unsigned IPA`。
+- `meta.json`：`objects` 置空以兼容旧格式，新增 `blobs`（深度连通域面片块：id / 距离 / x / 宽度 / 格数 / 归一化框）。
+
+## 16.3 仍未做（下一步）
+
+| # | 事项 | 备注 |
+|---|---|---|
+| 1 | **`xcodegen generate` 并提交 `.xcodeproj`** | 本次没做：本机没有 xcodegen，也没有 Mac。这是接 `core/` 的前提，见 §15.2 Q7 |
+| 2 | `project.yml` 加 `core/src` + `core/include` + 桥接头 / C++ 标准 | 片段已写在 §15.2 Q7，等第 1 步一起做 |
+| 3 | C API（`sv_match` 等）+ 第四个深度来源「自研（C++ CPU）」 | §11 P4 |
+| 4 | App 导出矫正后左右图 + 完整 `K/R/t/MW/MU/MUp` | §11 P0 的剩余项，P3 才用得上 |
+| 5 | `census`/`wta` 钳位偏移表 + `sgmPath` SIMD | 见 `core/README.md` 的基准与顺序 |
+
+## 16.4 静态核对结果（无 Mac，替代编译）
+
+代理能做的检查都做了：
+
+| 检查 | 结果 |
+|---|---|
+| 删除符号的残留引用（`grep` `Mask`/`Detection`/`detector`/`showMasks`/`radar`/`scan`/`labelHue`/`iou`/`screenDims`/`visionOrientation`） | 干净 |
+| 6 个改动过的 Swift 文件的 `{} / () / []` 配平（剥掉字符串与注释后计数） | 全部配平 |
+| 跨文件符号（`Blob`/`Analysis`/`Analysis.blobs`/`Snapshot.analysis`/`Unchecked`） | 定义与使用一致 |
+| `core/` 的 C++ 逐位对拍（3 个尺寸） | 全部通过 |
+| 模型/CI 残留引用（`grep` `mlpackage`/`mlmodel`/`export-model`/`with_yolo`/`coremlcompiler`） | 干净 |
+
+**第一次可能失败的地方**（按概率排序，供 CI 报错时对照）：
+
+1. `project.yml` 与提交的 `.xcodeproj` 不同步 —— 如果有人在 `main` 上重新生成过工程，
+   `test` 分支合并时会冲突；反之如果没重新生成，CI 用旧工程照样能编（但编不到 `core/`）。
+2. `ContentView` 的设置页删掉了一个 `Section`，`Form` 里的顺序变了 —— 语法上没问题，
+   但注意 `Section("Stereo matching")` 后面的 `.disabled(model.source != .stereo)` 修饰符仍然挂在它身上（正确）。
+3. `Capture.export` 里 `meta["objects"] = [] as [[String: Any]]` 的写法；
+   如果 `JSONSerialization` 对空数组的桥接有问题，改成 `[Any]()` 即可。
