@@ -1,0 +1,59 @@
+name: Build C++ core
+
+# core/ 是跨平台立体匹配库：Windows (MSVC) / Linux (gcc) / macOS (clang) 三平台编译，
+# 并跑与 numpy 孪生实现（tools/sgm_ref.py）的逐位对拍。
+#
+# 对拍用的是**仓库里提交的** core/tests/golden/（tiny，0.28 MB），所以这个 job
+# 不需要 Python、也不需要网络依赖，结果完全确定。要重新生成向量见 core/README.md。
+
+on:
+  push:
+    branches: [main, test]
+    paths:
+      - "core/**"
+      - ".github/workflows/core.yml"
+  pull_request:
+    paths:
+      - "core/**"
+      - ".github/workflows/core.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S core -B build/core -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build/core --config Release --parallel
+
+      - name: Golden test (bit-exact vs numpy twin)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN=""
+          for c in build/core/golden_test \
+                   build/core/Release/golden_test.exe \
+                   build/core/Debug/golden_test.exe; do
+            if [ -f "$c" ]; then BIN="$c"; break; fi
+          done
+          if [ -z "$BIN" ]; then
+            echo "找不到 golden_test，产物目录："
+            find build/core -maxdepth 3 -type f \( -name "*golden*" -o -name "*.exe" \) | head -20
+            exit 1
+          fi
+          echo "== $BIN =="
+          "$BIN" core/tests/golden
