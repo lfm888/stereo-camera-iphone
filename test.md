@@ -821,3 +821,102 @@ Swift（锁 CVPixelBuffer / MTLTexture.getBytes）
 | 3 | 真机自检数据 | 上面三个基准都是 CI runner；iPhone 上的标量耗时还没测（README 的 GPU 版是 20–22 fps） |
 | 4 | `match`（5×5 块匹配）与 `calibrate` 的 C++ 版 | 见 §15.2 Q2：`sgm_ref.py` 也没翻译 `rectify` / `unrectifyDepth` / `calibrate` |
 | 5 | `census` / `wta` 偏移表 + `sgmPath` SIMD | 见 `core/README.md` 的基准与顺序 |
+
+---
+
+# 18. C++ 接成第四个深度来源 + GPU/CPU 诊断页
+
+## 18.1 现在的四条深度来源
+
+侧栏那个彩色徽标点一下就循环切换：
+
+| 徽标 | DepthSource | 匹配在哪算 | 矫正 / 深度回转 | GPU 在干什么 |
+|---|---|---|---|---|
+| `GPU`（橙） | `.stereo` | Metal SGM-4 | Metal | 整条管线 + 显示 |
+| `C++`（紫） | `.cpuCore` | **C++ 核心（CPU）** | Metal | 只剩矫正、视差转深度、深度回转、显示 |
+| `APPLE`（蓝） | `.apple` | 系统 | — | 显示 |
+| `LIDAR`（绿） | `.lidar` | 系统 | — | 显示 |
+
+`.cpuCore` 与 `.stereo` 共用同一套双摄双路采集（`DepthSource.isMultiCam`），
+所以两种后端可以在同一台手机上背靠背切换对比。
+
+### `StereoEngine.stereoCPU` 的三段分工
+
+```
+1. rectify（左广角 + 右超广角）          GPU   沿用现有 Metal kernel，输入输出不变
+2. 读回像素 + census/cost/sgm×4/wta      CPU   CVPixelBuffer 锁定 + MTLTexture.getBytes → SVStereoCore
+3. 视差上传 + toDepth + unrectifyDepth   GPU   新增 Slot.dispCPU（.shared r32Float，可 replace(region:)）
+```
+
+分段耗时都留在 `StereoFrame` 里：`gpuRectifyMs` / `cpuMs` / `gpuDepthMs`。
+
+## 18.2 诊断页（侧栏 `waveform.path.ecg`）
+
+每帧一张表，直接把「谁在用 GPU」摊开：
+
+| 列 | 内容 |
+|---|---|
+| 设备 | `GPU`（绿）/ `CPU`（橙）/ `系统`（蓝） |
+| 阶段 | 例如 `census → costVolume → sgmPath×4 → wta` |
+| 耗时 | 该阶段的 ms；未单独计时的显示 `—` |
+| 备注 | 走的是哪个实现（`C++ 核心 core/src/sgm.cpp` / `Metal kernel` / …） |
+
+外加：帧率、GPU 合计、CPU 合计、`MTLDevice.currentAllocatedSize`（已分配显存）、
+`recommendedMaxWorkingSetSize`（工作集上限）、深度图尺寸。
+
+HUD 里也加了一行 `GPU x.x ms · CPU y.y ms`，切换来源时不用开面板就能看出迁移效果。
+
+**注意**：Metal 路径是整帧一条 command buffer，所以只能给出一个总 `gpuMs`，
+没法在 App 里拆出每个 kernel 的耗时（要拆得用 `MTLCounterSampleBuffer`）。
+C++ 路径天然分三段，反而更好定位瓶颈。
+
+## 18.3 CI 结果（commit `de004d8`）
+
+| 流水线 | 结果 |
+|---|---|
+| Build unsigned IPA | ✅ `** BUILD SUCCEEDED **`，**零 warning**，产物 `StereoVision-unsigned-ipa` **2.5 MB**（删模型前是 9.4 MB+） |
+
+## 18.4 这一轮的两个编译错误（都是流程问题，不是设计问题）
+
+| 报错 | 原因 | 修法 |
+|---|---|---|
+| `SVStereoCore has no member 'configure'` | ObjC 的 `configureMaxDisparity:p1:p2:...` 在 Swift 里被导成 `configureMaxDisparity(...)`，不是 `configure(maxDisparity:...)` | 在声明上加 `NS_SWIFT_NAME(configure(maxDisparity:p1:p2:uniqueness:lrCheck:))` |
+| `missing argument for parameter 'showDiagnostics'` / `cannot find '$showDiagnostics'` | 一次批量编辑里有 3 条被工具校验拒绝（整批未落盘），我重试时只补回 1 条 | 补齐 `@State showDiagnostics`、`.sheet` 绑定、`SidePanel` 调用点 |
+
+**教训**：批量编辑被拒时整批都不生效，重试必须逐条核对，不能凭印象。
+本地没有 Swift 编译器，这类问题只能靠 CI 抓，所以每次改动后都要自己 grep 一遍符号。
+
+## 18.5 需要你做的一步：`xcodegen generate`
+
+`project.yml` 已经改成两个 target：
+
+```yaml
+StereoCore:    type: static-library    # core/src + core/include，Apple clang 编
+StereoVision:  type: application
+               dependencies: [ StereoCore ]
+```
+
+但仓库里的 `StereoVision.xcodeproj` **还是单 target**（C++ 直接编进 App）。
+CI 直接编译这个文件，所以现在**CI 仍然是绿的**，只是还没有独立的 `.a`。
+
+在你那边跑一次：
+
+```sh
+xcodegen generate            # 需要 xcodegen；生成后会出现 StereoCore 静态库 target
+git add StereoVision.xcodeproj && git commit -m "chore: xcodegen 生成两 target 工程"
+```
+
+之后 `xcodebuild` 会先编 `libStereoCore.a` 再链进 App。
+预期会有两处差异需要盯一下（我无法在本地验证）：
+
+1. `core/include` 里的头文件在静态库里可能被当成 public header 进 Headers phase —— 无害；
+2. App target 的 `HEADER_SEARCH_PATHS` 仍然需要（`Bridge/StereoCoreBridge.mm` 要 `#include "stereo/stereo.h"`）。
+
+## 18.6 下一步
+
+| # | 事项 | 备注 |
+|---|---|---|
+| 1 | 真机跑一次 `C++` 来源，把诊断页的 `CPU ms` 与 `GPU ms` 记下来 | 这是唯一还缺的实测数据（README 的 Metal 版是 20–22 fps / ~6 ms 带宽下界） |
+| 2 | 按 §15.3(d) 优化 `census` / `wta`（钳位偏移表）→ `sgmPath` SIMD | 标量版在 x64 桌面是 211 ms/帧（640×360, D=64），iPhone 上只会更慢；升 GPU 才有意义之前得先降一个数量级 |
+| 3 | `match`（5×5 块匹配）与 `calibrate` 的 C++ 版 | 自动标定现在仍走 Metal，`(flip, dy)` 的搜索没搬到 CPU |
+| 4 | 把 `rectify` / `unrectifyDepth` 也搬 C++ | 那时 `.cpuCore` 才是真正「零 Metal」的后端，可以直接移植到 Windows/桌面 |
