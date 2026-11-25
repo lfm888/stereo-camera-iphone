@@ -44,7 +44,7 @@ struct ContentView: View {
                 .aspectRatio(model.aspect, contentMode: .fit)
                 .overlay(alignment: .topLeading) { HUD(model: model).padding(8) }
             }
-            SidePanel(model: model, showSettings: $showSettings)
+            SidePanel(model: model, showSettings: $showSettings, showDiagnostics: $showDiagnostics)
         }
         .background(Color.black.ignoresSafeArea())
         .statusBarHidden()

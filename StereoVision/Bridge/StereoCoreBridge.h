@@ -56,11 +56,15 @@ typedef NS_ENUM(NSInteger, SVImageFormat) {
 
 /// 改参数（不动 context，只是重新配置）。改变 maxDisparity 后内部缓冲区会重新分配。
 /// 返回 NO 时看 lastError。
+///
+/// NS_SWIFT_NAME 是必需的：否则桥接会把方法名导成 `configureMaxDisparity(...)`，
+/// 而不是我们想要的 `configure(maxDisparity:...)`。
 - (BOOL)configureMaxDisparity:(NSInteger)maxDisparity
                            p1:(NSInteger)p1
                            p2:(NSInteger)p2
                    uniqueness:(float)uniqueness
-                      lrCheck:(BOOL)lrCheck;
+                      lrCheck:(BOOL)lrCheck
+    NS_SWIFT_NAME(configure(maxDisparity:p1:p2:uniqueness:lrCheck:));
 
 /// 在**已矫正**的一对图上跑一次 SGM（Census 7×7 + 4 路径 + 唯一性 + 左右一致性 + 亚像素）。
 ///
