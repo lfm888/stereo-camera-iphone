@@ -18,22 +18,24 @@
 >
 > 竖屏下 *Rectified pair* 改成上下并排；`meta.json` 里的物体宽高与 x 偏移仍是**相机坐标系**（x 沿传感器长边，即竖屏时对应屏幕竖向），并额外写入 `orientation` 字段。
 
-StereoVision 把 iPhone 的后置双摄（广角 + 超广角）变成一台实时的**立体相机**：测出物体的远近，用自己训练的语义分割模型识别并勾出物体轮廓（当前模型的分割目标是 `glasses`），并用 9 种方式呈现场景，从经典深度图到可以拖动旋转的 3D 点云。
+StereoVision 把 iPhone 的后置双摄（广角 + 超广角）变成一台实时的**立体相机**：测出物体的远近，再按深度连续性把场景切成一块块面片，并用 8 种方式呈现场景，从经典深度图到可以拖动旋转的 3D 点云。
+
+> **本分支（`test`）已删除语义分割模型整条链路**，只用传统方法算深度；`3D segmentation` 视图保留（它只靠深度连通域，本来就不依赖神经网络）。详见 [`test.md`](test.md) §15。
 
 > **已在 iPhone 16 与 iPhone 15 Plus 上测试。** 只要 iPhone 有「广角 + 超广角」后置双摄就能跑，与两颗镜头的排布无关：程序会读取这对镜头的外参，因此竖排（iPhone 16）、对角（iPhone 13–15）或水平排布都能被正确配准。相机格式、标定与帧率可能因机型而异。LiDAR 数据源尚未在真机上运行过。
 
-这是一个个人学习项目，与任何课程作业或考试无关。写它是为了把「人工视觉」课上的概念真正跑起来：对极几何、配准、立体匹配、三角测量与目标检测——看着它们在手机上实时运行，比看公式好懂得多。
+这是一个个人学习项目，与任何课程作业或考试无关。写它是为了把「人工视觉」课上的概念真正跑起来：对极几何、配准、立体匹配、三角测量与深度分割——看着它们在手机上实时运行，比看公式好懂得多。
 
 完整的立体流程（配准、匹配、三角测量）都是从零写的，全部跑在 GPU 上。你随时可以切换到 Apple 自己的深度，或 Pro 机型上的 LiDAR 扫描仪，用来做对比。
 
 ## 功能
 
 - **实时深度**：在 iPhone 16 上约 20+ fps
-- **目标检测与分割**：用自己训练的语义分割模型（`lens-seg`：YOLO11n 骨干 + 轻量语义头，256×256，2 类 `background` / `glasses`）。喂图前先把画面按当前方向转正，再取**长宽 min 为边长的中央正方形**缩到 256×256（训练样本是正方的，整幅拉伸会把镜头拉变形），分割结果变成带类别、置信度、彩色掩码的物体，并跨帧跟随（同一类的碎片会合并成一个物体）
-- **尺寸测量**：每个物体给出距离、横向偏移和近似宽 × 高（cm）
+- **深度分割**（纯传统方法）：把深度图降采样成 160×90 的网格，按深度连续性做 4 邻域连通域，得到一块块面片；每块给出平均距离、横向偏移与估计宽度。不需要知道它们是什么
+- **尺寸估算**：面片块按针孔模型给出距离、横向偏移和近似宽度（cm）
 - **点选测距**：点屏幕上任意一点即可测距；准星始终显示画面中心的距离
 - **三种深度来源**：自研立体匹配（默认）、Apple 的 Dual-Wide 深度、以及 iPhone Pro（12 Pro 及以后）上的 LiDAR。没有该传感器的机型不会出现 LiDAR 选项。LiDAR 用激光飞行时间直接测距，在立体视觉失效的无纹理墙面上也能工作，量程约 5 m，因此很适合作为评估立体匹配的真值
-- **拍照与录像**：录下的正是屏幕上看到的内容（当前视图模式，含掩码、标签与距离），保存到「照片」。视频为 HEVC、1280 px、30 fps
+- **拍照与录像**：录下的正是屏幕上看到的内容（当前视图模式，含标签与距离），保存到「照片」。视频为 HEVC、1280 px、30 fps
 - **原始数据导出**：每次拍照都会在 *文件 › 我的 iPhone › StereoVision* 里导出一份，便于离线分析（Python、OpenCV、MeshLab……）：
 
   | 文件 | 内容 |
@@ -42,21 +44,20 @@ StereoVision 把 iPhone 的后置双摄（广角 + 超广角）变成一台实�
   | `rgb.png` | 深度所对应的彩色图 |
   | `depth_mm.png` | 16 位灰度深度，单位毫米（0 = 无效） |
   | `cloud.ply` | 彩色点云，单位米（x 向右、y 向下、z 向前） |
-  | `meta.json` | 内参、基线、深度来源与各项设置、检测到的物体及其距离和尺寸 |
+  | `meta.json` | 内参、基线、深度来源与各项设置、深度连通域切出的面片块（`blobs`） |
 - **自动标定**：启动时自动标定两摄的相对姿态，也可以在设置里手动微调
 
 ## 视图模式
 
 | 模式 | 看到什么 |
 |---|---|
-| **Standard** | 相机画面 + 物体掩码、检测框、标签、距离与尺寸 |
+| **Standard** | 相机画面 + 准星读数；点屏幕上任意一点即可测距 |
 | **Depth map** | 用颜色表示距离：红=近，蓝=远 |
 | **Overlay** | 相机画面与深度图叠加（透明度可调） |
 | **Disparity** | 原始视差的灰度图（越亮越近） |
 | **Rectified pair** | 两幅配准后的图并排显示，绿线为对齐参考线：同一个点在两幅图中必须落在同一条线上 |
 | **Anaglyph** | 红/青立体图，配红青眼镜观看 |
 | **3D segmentation** | 只靠深度把场景切成面片与物体，不需要知道它们是什么 |
-| **Bird's-eye** | 俯视图：视场、距离圈、障碍物剖面，以及按位置摆在平面图上的物体 |
 | **Point cloud** | 3D 重建的点云：拖动旋转、双指缩放、点击复位 |
 
 ## 距离是怎么算出来的
@@ -127,11 +128,9 @@ $$\Delta Z \approx \frac{Z^2}{f \cdot B}\,\Delta d$$
 - **画质差异**：超广角要被上采样约 2× 才能对齐广角，本身就模糊，限制了细节
 - **标定漂移**：如果深度看起来不对，打开 *Rectified pair* 看特征是否落在同一条绿线上，然后按 *Calibrate*
 
-检测是异步执行的，所以掩码可能略微滞后于快速运动的物体。
-
 ## 性能与精度
 
-**速度（iPhone 16，SGM + 左右一致性检查 + 分割模型）：** 约 20–22 fps，稳定。相机上限 30 fps。想用精度换速度，可以把最大视差降到 32，或在设置里切换成块匹配。
+**速度（iPhone 16，SGM + 左右一致性检查）：** 约 20–22 fps，稳定。相机上限 30 fps。想用精度换速度，可以把最大视差降到 32，或在设置里切换成块匹配。
 
 **匹配精度**（`swift scripts/verify_stereo.swift`，在 Mac 上直接跑 App 的 GPU 代码；合成场景的视差已知，含一个斜面、一个前景物体，以及一条几乎没有纹理的区域（对比度 4%））：
 
@@ -145,11 +144,11 @@ $$\Delta Z \approx \frac{Z^2}{f \cdot B}\,\Delta d$$
 - 左右一致性检查把错误匹配砍掉约三分之一，代价是多判掉一些无效像素
 - 测试纹理是随机的，每次数字会略有不同
 
-**检测物体的距离**取其掩码内部区域深度的中位数，因此检测框内的背景像素不会把它带偏；数值还会按物体随时间平滑。
+**面片块的距离**取其区域内部深度像素的中位数，所以边界上的异类像素不会把它带偏。
 
 ## 快速开始
 
-环境要求：具备 Dual-Wide 摄像头的 iPhone、iOS 18+、Xcode 26+（含 Metal Toolchain：`xcodebuild -downloadComponent MetalToolchain`）。本机编译不需要 Python（仓库里带着已经导好的模型）；只有自己想重导模型时才需要（macOS / Linux + torch + coremltools + segzoo 的依赖）。
+环境要求：具备 Dual-Wide 摄像头的 iPhone、iOS 18+、Xcode 26+（含 Metal Toolchain：`xcodebuild -downloadComponent MetalToolchain`）。本机编译不需要 Python。
 
 ```sh
 git clone <repo> && cd stereo-camera-iphone
@@ -157,15 +156,7 @@ cp Config/Local.xcconfig.example Config/Local.xcconfig   # 填入你的 Apple te
 open StereoVision.xcodeproj                              # 在你的 iPhone 上运行
 ```
 
-要换模型，把 `models/lens-seg.pth` 换成新的 segzoo `best.pth` 推上去即可：`.github/workflows/export-model.yml` 会在 Linux 上导出 mlpackage（torch + coremltools），再到 macOS 上用 `coremlcompiler` 编译并打出未签名 IPA；装好后用 `./scripts/fetch_ipa.sh` 把 `StereoVision-unsigned.ipa` 拿到 `build/` 里。细节见 [`models/README.md`](models/README.md)。
-
-`scripts/export_lens_seg.py` 读的是 segzoo 的 `best.pth`：里面只有 `state_dict` 和描述结构的 `meta`（arch / encoder / num_classes / img_size / 归一化），所以要靠 segzoo 的 `models.load_checkpoint()` 重建网络，再用 coremltools 导出。导出的模型把“/255 + 归一化 + softmax”都写进了图里，类名、输入尺寸、归一化参数写进 CoreML metadata，App 侧不硬编码任何类别（换数据集重训后只要重新导一次模型，同一个 App 就能跑）。
-
-App 侧的预处理与训练一致：`VNImageRequestHandler` 先按屏幕方向把 buffer 转正，`imageCropAndScaleOption = .centerCrop` 取边长 = `min(宽, 高)` 的中央正方形，再等比缩到模型输入；掩码会按“裁剪偏移 + 方向”换回相机坐标系，所以测距和叠层仍然对齐。
-
-**为什么导出不能放在 Windows 上：** Windows 的 coremltools 缺原生库（`libmilstoragepython` / `libmodelpackage`），写不了 `mlpackage`，只能回退成 float32 的 neural network `.mlmodel`——那种格式在 iPhone 上跑不到 GPU / ANE，只能吃 CPU。Linux / macOS 的 coremltools wheel 带原生库，可以存 **mlprogram / float16 的 `.mlpackage`（iOS17+）**，Core ML 才会把它调度到 Metal 与神经引擎上；这也是 CI 里的导出路径。
-
-没有模型也能用，此时会退回到 Apple 自带的检测器（人、动物、显著物体）。手机**竖着、横着都能用**：竖着（灵动岛朝上）或者两个横屏方向都行，画面、掩码、点云都保持正立；iPhone 16 横屏时请让灵动岛朝左（这是传感器自然方向），其它情况由显示层自动旋转。
+手机上**竖着、横着都能用**：竖着（灵动岛朝上）或者两个横屏方向都行，画面、叠层、点云都保持正立；iPhone 16 横屏时请让灵动岛朝左（这是传感器自然方向），其它情况由显示层自动旋转。
 
 ## 实现细节
 
@@ -196,7 +187,7 @@ $T_{\Delta y}$ 是给超广角那一路的垂直平移，用来吃掉残余的�
 
 ### 视差匹配：传统方法，没有神经网络
 
-Census 7×7 压成 48 bit，汉明距离当代价 → SGM 4 路径聚合（$P_2$ 随图像梯度自适应）→ WTA + uniqueness + 左右一致性 + 抛物线亚像素 → $Z=fB/d$。设置里可切成 5×5 块匹配。分割模型只做分割，**完全不参与视差**。
+Census 7×7 压成 48 bit，汉明距离当代价 → SGM 4 路径聚合（$P_2$ 随图像梯度自适应）→ WTA + uniqueness + 左右一致性 + 抛物线亚像素 → $Z=fB/d$。设置里可切成 5×5 块匹配。
 
 **为什么能实时**（约 20–22 fps）：640×360 只有 23 万像素；代价是 `popcount` 位运算；代价体积用 `uchar`（14.7 MB 而非 88 MB）；只跑 4 条路径；GPU 上「一个线程组 = 一条扫描线、线程 = 一个视差」，动态规划状态放在片上 `prev[]`、沿扫描线串行推进；整帧一条 command buffer，CPU 不读回。瓶颈是显存带宽（每帧约 300 MB，下限 ≈6 ms），不是算力。
 

@@ -63,6 +63,10 @@ uv run --with numpy --with pillow tools/make_demo_export.py demo-export
 | 俯视图 | `OverlayView.swift:66-101` |
 
 能实时调：`Min` / `Max` / `Overlay opacity` / 点云 `Step`、`Point size` / 检测开关。
+
+> **注意**：`test` 分支已删除 `Bird's-eye` 与语义分割模型（见仓库根的 `test.md` §15），
+> 所以现在的 App 只有 8 个视图模式、也没有物体框/掩码。`viewer.html` 仍然保留了这两项，
+> 用来回放**旧导出**（历史 `meta.json` 里的 `objects` 与 `scan`）；新导出的 `objects` 是空数组。
 只读（来自 `meta.json`，导出那刻就固化了）：算法、最大视差、P1/P2、Δy、flip、基线、内参。
 
 **两个实现要点：**

@@ -1,10 +1,9 @@
 #!/bin/sh
-# 把 GitHub Actions 最新一次成功的「模型 + IPA」产物下载到本地仓库：
+# 把 GitHub Actions 最新一次成功的构建产物下载到本地仓库：
 #   build/StereoVision-unsigned.ipa
 #
 # 用法：
-#   ./scripts/fetch_ipa.sh            # 取最近一次成功的「导出模型 + 打 IPA」流水线
-#   ./scripts/fetch_ipa.sh --all      # 取最近一次成功的 ipa.yml（用仓库里已提交的模型打包）
+#   ./scripts/fetch_ipa.sh            # 取最近一次成功的 ipa.yml（未签名 IPA）
 #
 # 需要 curl + unzip + node，以及 GitHub 凭据：优先用 $GITHUB_TOKEN，否则问本机 git 的 credential
 # helper（Windows 上就是凭据管理器里那个，push 能成功就能下载）。
@@ -12,8 +11,8 @@ set -e
 cd "$(dirname "$0")/.."
 
 REPO="${REPO:-lfm888/stereo-camera-iphone}"
-WORKFLOW="Build IPA with a freshly exported model"
-[ "$1" = "--all" ] && WORKFLOW="Build unsigned IPA"
+# 分割模型已删（见 test.md §15），现在只有一条出 IPA 的流水线
+WORKFLOW="Build unsigned IPA"
 OUT="build/StereoVision-unsigned.ipa"
 
 TOKEN="${GITHUB_TOKEN:-}"

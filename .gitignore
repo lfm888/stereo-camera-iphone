@@ -4,8 +4,7 @@ xcuserdata/
 *.xcuserstate
 .DS_Store
 Config/Local.xcconfig
-# 模型：source ckpt 在 models/ 里，导出的 mlpackage 提交在 StereoVision/Models/ 下（由
-# .github/workflows/export-model.yml 生成）。
+# 分割模型链路已删（test 分支，见 test.md §15）；*.pt 仍忽略，防止误提交
 *.pt
 .build/
 .swiftpm/
