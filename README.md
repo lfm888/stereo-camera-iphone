@@ -157,7 +157,7 @@ cp Config/Local.xcconfig.example Config/Local.xcconfig   # 填入你的 Apple te
 open StereoVision.xcodeproj                              # 在你的 iPhone 上运行
 ```
 
-要换模型，把 `models/lens-seg.pth` 换成新的 segzoo `best.pth` 推上去即可：`.github/workflows/export-model.yml` 会在 Linux 上导出 mlpackage（torch + coremltools），再到 macOS 上用 `coremlcompiler` 编译并打出未签名 IPA，artifact 里直接拿安装包，细节见 [`models/README.md`](models/README.md)。
+要换模型，把 `models/lens-seg.pth` 换成新的 segzoo `best.pth` 推上去即可：`.github/workflows/export-model.yml` 会在 Linux 上导出 mlpackage（torch + coremltools），再到 macOS 上用 `coremlcompiler` 编译并打出未签名 IPA；装好后用 `./scripts/fetch_ipa.sh` 把 `StereoVision-unsigned.ipa` 拿到 `build/` 里。细节见 [`models/README.md`](models/README.md)。
 
 `scripts/export_lens_seg.py` 读的是 segzoo 的 `best.pth`：里面只有 `state_dict` 和描述结构的 `meta`（arch / encoder / num_classes / img_size / 归一化），所以要靠 segzoo 的 `models.load_checkpoint()` 重建网络，再用 coremltools 导出。导出的模型把“/255 + 归一化 + softmax”都写进了图里，类名、输入尺寸、归一化参数写进 CoreML metadata，App 侧不硬编码任何类别（换数据集重训后只要重新导一次模型，同一个 App 就能跑）。
 

@@ -28,18 +28,19 @@ sha256 `9ce91666b4c74b668fdc2f9f026eb0d7b67cb0e25ac323ea7cdbfaab9f135c39`
 换模型 = 覆盖 `models/lens-seg.pth` 后推送（或手动跑 `Build IPA with a freshly exported model`），
 不需要改 App 代码：类名、输入尺寸、归一化参数都写在 CoreML metadata 里。
 
-## 可选：在本机复核数值（需要 macOS）
+流水线里**没有**在 Linux 上验证 pth 的步骤（那要把 torch + segzoo 整套环境再装一遍，白花时间）；
+能验证的只有导出脚本自己做的一次 trace 对拍，剩下的交给 `coremlcompiler` 与真机。
 
-导出脚本里的 CoreML 对拍只在 macOS 上有运行时，所以另有一个可以拆成两步的工具：
+## 拿安装包到本地
 
 ```sh
-# 任意有 torch 的平台：存 PyTorch 参考输出（固定噪声图，seed 0）
-python scripts/verify_lens_seg.py dump  --ckpt models/lens-seg.pth --out build/ref.npz
-# macOS：真跑一遍 mlpackage 与参考对拍，并核对输入尺寸 / 输出形状 / metadata 类名
-python scripts/verify_lens_seg.py check --mlpackage StereoVision/Models/lens-seg.mlpackage --ref build/ref.npz
+./scripts/fetch_ipa.sh          # 最近一次成功的「导出 + 打包」→ build/StereoVision-unsigned.ipa
+./scripts/fetch_ipa.sh --all    # 最近一次成功的 ipa.yml（用仓库里已提交的模型打包）
 ```
 
-## 本机导出（仅 macOS / Linux）
+脚本用 `$GITHUB_TOKEN`，没有就问本机 git 的 credential helper（能 push 就能下）。
+
+## 本机导出（仅 macOS / Linux，可选）
 
 ```sh
 python scripts/export_lens_seg.py --ckpt models/lens-seg.pth --segzoo ../segzoo   # 默认 mlpackage
