@@ -23,6 +23,7 @@ struct ContentView: View {
     @State private var showSettings = false
     @State private var dragStart: (yaw: Float, pitch: Float)?
     @State private var zoomStart: Float?
+    @State private var showDiagnostics = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -50,6 +51,7 @@ struct ContentView: View {
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .sheet(isPresented: $showSettings) { SettingsView(model: model) }
+        .sheet(isPresented: $showDiagnostics) { DiagnosticsView(model: model) }
         .task { await model.start() }
     }
 
