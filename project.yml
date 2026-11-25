@@ -3,23 +3,41 @@ options:
   bundleIdPrefix: com.example
   deploymentTarget:
     iOS: "18.0"
+
 targets:
+  # 第一层：C++ 核心，编成静态库（由 Apple clang 编译）
+  #   Windows / Linux 上用 core/CMakeLists.txt 产同一个 libstereo_core.a
+  StereoCore:
+    type: static-library
+    platform: iOS
+    sources:
+      - path: core/src
+      - path: core/include
+    settings:
+      base:
+        PRODUCT_NAME: StereoCore
+        SKIP_INSTALL: YES
+        TARGETED_DEVICE_FAMILY: "1"
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/core/include"
+        CLANG_CXX_LANGUAGE_STANDARD: gnu++20
+        CLANG_CXX_LIBRARY: libc++
+        # 异常保持开启：stereo_api.cpp 在 C 边界上 try/catch 掉 std::bad_alloc，
+        # 保证不会有 C++ 异常越过 stereo.h（Swift 无法展开它们）。
+        # 关掉反而让 new 直接 abort。
+
+  # 第二层（Bridge/*.mm）与第三层（Swift）
   StereoVision:
     type: application
     platform: iOS
+    dependencies:
+      - target: StereoCore
     configFiles:
       Debug: Config/Base.xcconfig
       Release: Config/Base.xcconfig
     sources:
       - path: StereoVision
-      - path: core/src
-      - path: core/include
     settings:
       base:
-        SWIFT_OBJC_BRIDGING_HEADER: StereoVision/StereoVision-Bridging-Header.h
-        HEADER_SEARCH_PATHS: "$(SRCROOT)/core/include"
-        CLANG_CXX_LANGUAGE_STANDARD: gnu++20
-        CLANG_CXX_LIBRARY: libc++
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"
@@ -28,6 +46,12 @@ targets:
         CURRENT_PROJECT_VERSION: "1"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+        # 第二层：Swift 只看桥接头，桥接头里不出现 C++ 头
+        SWIFT_OBJC_BRIDGING_HEADER: StereoVision/StereoVision-Bridging-Header.h
+        # Bridge/*.mm 要 include "stereo/stereo.h"
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/core/include"
+        CLANG_CXX_LANGUAGE_STANDARD: gnu++20
+        CLANG_CXX_LIBRARY: libc++
         INFOPLIST_KEY_CFBundleDisplayName: StereoVision
         INFOPLIST_KEY_NSCameraUsageDescription: "StereoVision uses the wide and ultra-wide cameras to compute stereo depth."
         INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "StereoVision saves photos and videos of the stereo view to your library."

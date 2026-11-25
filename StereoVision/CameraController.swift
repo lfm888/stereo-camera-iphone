@@ -1,18 +1,37 @@
 import AVFoundation
 
 enum DepthSource: String, CaseIterable, Identifiable {
-    case stereo, apple, lidar
+    /// Metal 版（Census/SGM 全在 GPU）
+    case stereo
+    /// C++ 核心版（矫正与深度回转在 GPU，匹配在 CPU）
+    case cpuCore
+    case apple
+    case lidar
     var id: Self { self }
 
     var title: String {
         switch self {
-        case .stereo: "Custom stereo (Census + SGM)"
+        case .stereo: "Custom stereo (Metal: Census + SGM)"
+        case .cpuCore: "Custom stereo (C++ core, CPU)"
         case .apple: "Apple Dual-Wide depth"
         case .lidar: "LiDAR depth"
         }
     }
 
-    var short: String { rawValue.uppercased() }
+    var short: String {
+        switch self {
+        case .stereo: "GPU"
+        case .cpuCore: "C++"
+        case .apple: "APPLE"
+        case .lidar: "LIDAR"
+        }
+    }
+
+    /// 前两种都走「双摄 + 两路输出」；后两种走系统深度输出。
+    var isMultiCam: Bool { self == .stereo || self == .cpuCore }
+
+    /// 能否提供「已配准的一对图」（Rectified pair / Anaglyph 视图需要）。
+    var providesRectifiedPair: Bool { isMultiCam }
 
     var deviceType: AVCaptureDevice.DeviceType {
         self == .lidar ? .builtInLiDARDepthCamera : .builtInDualWideCamera
@@ -47,7 +66,7 @@ final class CameraController: NSObject, AVCaptureDataOutputSynchronizerDelegate,
             session = nil
             sync = nil
             do {
-                let s = try source == .stereo ? makeStereo() : makeDepth(source.deviceType)
+                let s = try source.isMultiCam ? makeStereo() : makeDepth(source.deviceType)
                 session = s
                 s.startRunning()
             } catch {

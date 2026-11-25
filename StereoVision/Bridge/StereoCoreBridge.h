@@ -54,6 +54,14 @@ typedef NS_ENUM(NSInteger, SVImageFormat) {
                                       lrCheck:(BOOL)lrCheck NS_DESIGNATED_INITIALIZER;
 - (instancetype)init NS_UNAVAILABLE;
 
+/// 改参数（不动 context，只是重新配置）。改变 maxDisparity 后内部缓冲区会重新分配。
+/// 返回 NO 时看 lastError。
+- (BOOL)configureMaxDisparity:(NSInteger)maxDisparity
+                           p1:(NSInteger)p1
+                           p2:(NSInteger)p2
+                   uniqueness:(float)uniqueness
+                      lrCheck:(BOOL)lrCheck;
+
 /// 在**已矫正**的一对图上跑一次 SGM（Census 7×7 + 4 路径 + 唯一性 + 左右一致性 + 亚像素）。
 ///
 /// left/right 由调用方保证同尺寸；stride 是**字节**行跨度（CoreVideo 与 Metal 都给对齐过的跨度）。

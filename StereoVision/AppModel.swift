@@ -145,12 +145,19 @@ struct PipelineSettings: Sendable {
     var flip = false
     var orient = DisplayOrientation.landscapeRight
     var calibrate = true
+    /// true = 匹配交给 C++ 核心（CPU）；false = 走 Metal 的 SGM。
+    /// 由 AppModel 依据 DepthSource 推入，不放进设置页的 picker。
+    var cpuMatcher = false
 }
 
 struct FrameReport: Sendable {
     var analysis: Analysis
     var fps: Double
     var gpuMs: Double
+    /// C++ 路径的匹配耗时；Metal 路径为 0。
+    var cpuMs: Double = 0
+    var matcherName: String = "—"
+    var stages: [StageDiag] = []
     var baselineMM: Float
     var baselineDeg: Float
     var hasExtrinsics: Bool
@@ -158,6 +165,13 @@ struct FrameReport: Sendable {
     var depthSize: CGSize
     var aspect: CGFloat
     var calibration: (flip: Bool, dy: Float)?
+}
+
+/// 这一帧走的是哪条管线（决定诊断页上那张表）。
+enum PipelineKind {
+    case metalStereo
+    case cpuStereo
+    case systemDepth
 }
 
 final class FrameStore: @unchecked Sendable {
@@ -192,23 +206,55 @@ final class Pipeline: @unchecked Sendable {
             settings.withLock { $0.flip = c.flip; $0.yOffset = c.dy }
             cal = c
         }
-        guard let f = engine.stereo(wide, ultra, s) else { return }
-        finish(f, cal)
+        guard let f = s.cpuMatcher ? engine.stereoCPU(wide, ultra, s) : engine.stereo(wide, ultra, s) else { return }
+        finish(f, cal, s.cpuMatcher ? .cpuStereo : .metalStereo)
     }
 
     func depthData(_ video: CMSampleBuffer, _ depth: AVDepthData) {
         let s = settings.withLock { $0 }
         guard let f = engine.depthData(video, depth, s) else { return }
-        finish(f, nil)
+        finish(f, nil, .systemDepth)
     }
 
-    private func finish(_ f: StereoFrame, _ cal: (flip: Bool, dy: Float)?) {
+    /// 哪个阶段在 GPU / CPU。这张表是诊断页的数据源。
+    private static func diagnostics(_ kind: PipelineKind, _ f: StereoFrame) -> (String, [StageDiag]) {
+        switch kind {
+        case .metalStereo:
+            return ("Metal SGM-4（全 GPU）", [
+                StageDiag(id: 0, name: "rectify → census → costVolume → sgmPath×4 → wta → toDepth → unrectify",
+                          device: .gpu, ms: f.gpuMs, note: "整帧一条 command buffer，未细分"),
+                StageDiag(id: 1, name: "显示 / 点云渲染", device: .gpu, ms: nil, note: "MTKView，每帧一次"),
+            ])
+        case .cpuStereo:
+            return ("C++ core（CPU 匹配）", [
+                StageDiag(id: 0, name: "rectify（两路单应重采样）",
+                          device: .gpu, ms: f.gpuRectifyMs, note: "Metal kernel"),
+                StageDiag(id: 1, name: "像素读回",
+                          device: .cpu, ms: nil, note: "CVPixelBuffer 锁定 + MTLTexture.getBytes，约 2×0.9 MB/帧"),
+                StageDiag(id: 2, name: "census → costVolume → sgmPath×4 → wta",
+                          device: .cpu, ms: f.cpuMs, note: "C++ 核心 core/src/sgm.cpp"),
+                StageDiag(id: 3, name: "视差上传 + toDepth → unrectify",
+                          device: .gpu, ms: f.gpuDepthMs, note: "Metal kernel"),
+                StageDiag(id: 4, name: "显示 / 点云渲染", device: .gpu, ms: nil, note: "MTKView，每帧一次"),
+            ])
+        case .systemDepth:
+            return ("系统深度（Apple / LiDAR）", [
+                StageDiag(id: 0, name: "系统深度图", device: .system, ms: nil, note: "由系统计算，App 拿不到耗时"),
+                StageDiag(id: 1, name: "显示 / 点云渲染", device: .gpu, ms: nil, note: "MTKView"),
+            ])
+        }
+    }
+
+    private func finish(_ f: StereoFrame, _ cal: (flip: Bool, dy: Float)?, _ kind: PipelineKind) {
         store.latest = f
         let now = CACurrentMediaTime()
         stamps.append(now)
         stamps.removeAll { now - $0 > 1 }
         let a = analyzer.analyze(f)
-        publish?(FrameReport(analysis: a, fps: Double(stamps.count), gpuMs: f.gpuMs, baselineMM: f.baselineMM, baselineDeg: f.baselineDeg,
+        let (name, stages) = Self.diagnostics(kind, f)
+        publish?(FrameReport(analysis: a, fps: Double(stamps.count), gpuMs: f.gpuMs, cpuMs: f.cpuMs,
+                             matcherName: name, stages: stages,
+                             baselineMM: f.baselineMM, baselineDeg: f.baselineDeg,
                              hasExtrinsics: engine.hasExtrinsics, K: f.K,
                              depthSize: CGSize(width: f.width, height: f.height),
                              aspect: CGFloat(f.color.width) / CGFloat(f.color.height), calibration: cal))
@@ -236,9 +282,18 @@ final class AppModel {
     var orbit: Float = 1.2
     var calibrating = false
 
+    /// HUD 用的一行摘要：GPU / CPU 各占多少。
+    var gpuStagesSummary: String {
+        if gpuReport.cpuMs > 0 {
+            return String(format: "GPU %.1f ms · CPU %.1f ms", gpuReport.gpuMs, gpuReport.cpuMs)
+        }
+        return String(format: "GPU %.1f ms", gpuReport.gpuMs)
+    }
+
     private(set) var analysis = Analysis()
     private(set) var fps = 0.0
     private(set) var gpuMs = 0.0
+    private(set) var gpuReport = GpuReport()
     private(set) var baselineMM: Float = 0
     private(set) var baselineDeg: Float = 0
     private(set) var hasExtrinsics = true
@@ -321,10 +376,11 @@ final class AppModel {
     func setSource(_ s: DepthSource) {
         source = s
         status = nil
-        if s != .stereo && mode.needsStereoPair { mode = .standard }
+        push { $0.cpuMatcher = (s == .cpuCore) }
+        if !s.providesRectifiedPair && mode.needsStereoPair { mode = .standard }
         pipeline.store.latest = nil
         analysis = Analysis()
-        if s == .stereo { calibrate() }
+        if s.isMultiCam { calibrate() }
         camera.start(s)
     }
 
@@ -348,7 +404,7 @@ final class AppModel {
             "date": ISO8601DateFormatter().string(from: .now),
             "source": source.rawValue,
             "mode": mode.title,
-            "matcher": source == .stereo ? matcher.rawValue : "n/a",
+            "matcher": source.isMultiCam ? (source == .cpuCore ? "c++ core (cpu)" : matcher.rawValue) : "n/a",
             "max_disparity": maxDisparity,
             "lr_check": lrCheck,
             "p1": Int(p1), "p2": Int(p2),
@@ -451,6 +507,11 @@ final class AppModel {
         analysis = r.analysis
         fps = r.fps
         gpuMs = r.gpuMs
+        let dev = renderer.device
+        gpuReport = GpuReport(stages: r.stages, matcherName: r.matcherName,
+                              gpuMs: r.gpuMs, cpuMs: r.cpuMs,
+                              allocatedMB: Double(dev.currentAllocatedSize) / 1_048_576.0,
+                              workingSetMB: Double(dev.recommendedMaxWorkingSetSize) / 1_048_576.0)
         baselineMM = r.baselineMM
         baselineDeg = r.baselineDeg
         hasExtrinsics = r.hasExtrinsics

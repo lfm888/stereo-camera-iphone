@@ -60,6 +60,34 @@
     // ARC 下不要调用 [super dealloc]
 }
 
+- (BOOL)configureMaxDisparity:(NSInteger)maxDisparity
+                           p1:(NSInteger)p1
+                           p2:(NSInteger)p2
+                   uniqueness:(float)uniqueness
+                      lrCheck:(BOOL)lrCheck {
+    if (_ctx == NULL) {
+        _lastError = @"context 已经释放";
+        return NO;
+    }
+
+    stereo_config cfg;
+    stereo_config_default(&cfg);
+    cfg.max_disp = (int)maxDisparity;
+    cfg.p1 = (int)p1;
+    cfg.p2 = (int)p2;
+    cfg.uniqueness = uniqueness;
+    cfg.lr_check = lrCheck ? 1 : 0;
+
+    if (stereo_configure(_ctx, &cfg) != 0) {
+        _lastError = [NSString stringWithUTF8String:stereo_last_error(_ctx)];
+        return NO;
+    }
+
+    _maxDisparity = maxDisparity;
+    _lastError = @"";
+    return YES;
+}
+
 - (BOOL)matchLeft:(const uint8_t *)left
        leftStride:(NSInteger)leftStride
        leftFormat:(SVImageFormat)leftFormat

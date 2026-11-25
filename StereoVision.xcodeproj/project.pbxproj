@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DE0001000000000000B008 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0001000000000000F008 /* DiagnosticsView.swift */; };
 		C0DE0001000000000000B001 /* sgm.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0001000000000000F001 /* sgm.cpp */; };
 		C0DE0001000000000000B002 /* stereo_api.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0001000000000000F002 /* stereo_api.cpp */; };
 		C0DE0001000000000000B003 /* StereoCoreBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0001000000000000F006 /* StereoCoreBridge.mm */; };
@@ -23,6 +24,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		C0DE0001000000000000F008 /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		C0DE0001000000000000F001 /* sgm.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "core/src/sgm.cpp"; sourceTree = "<group>"; };
 		C0DE0001000000000000F002 /* stereo_api.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "core/src/stereo_api.cpp"; sourceTree = "<group>"; };
 		C0DE0001000000000000F003 /* sgm.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = "core/include/stereo/sgm.hpp"; sourceTree = "<group>"; };
@@ -54,6 +56,7 @@
 				F3911430056B77D868328295 /* CameraController.swift */,
 				1921C3786C3FB672A67C7E9B /* Capture.swift */,
 				AF78EAB8BCDBF65A25A5D815 /* ContentView.swift */,
+				C0DE0001000000000000F008 /* DiagnosticsView.swift */,
 				2DA425104A6DE48AF50AE289 /* OverlayView.swift */,
 				D8C866D86415300FAB186B5D /* Renderer.swift */,
 				6E909856B28ECAC981F8F9C1 /* Shaders.metal */,
@@ -174,6 +177,7 @@
 				CD63C1D3316EB9A56D11FB12 /* CameraController.swift in Sources */,
 				6D6FF7A50EAA907EE3B1FD83 /* Capture.swift in Sources */,
 				3C6B87A0F806359E573EF930 /* ContentView.swift in Sources */,
+				C0DE0001000000000000B008 /* DiagnosticsView.swift in Sources */,
 				303596F04684BEEC1FD9B97E /* OverlayView.swift in Sources */,
 				DFDE90D557B69AC5674000A7 /* Renderer.swift in Sources */,
 				7021D3F748CDFD42D14E7E53 /* Shaders.metal in Sources */,

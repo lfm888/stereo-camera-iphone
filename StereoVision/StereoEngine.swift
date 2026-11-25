@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreVideo
 import Metal
+import QuartzCore
 import simd
 
 struct Intrinsics: Sendable {
@@ -16,6 +17,11 @@ final class StereoFrame: @unchecked Sendable {
     let K: Intrinsics
     let image: CVPixelBuffer
     let gpuMs: Double
+    /// C++ 后端（CPU）的匹配耗时；Metal 路径为 0。
+    let cpuMs: Double
+    /// 分段计时（仅 C++ 路径有值）：矫正、深度回转各一段 GPU。
+    let gpuRectifyMs: Double
+    let gpuDepthMs: Double
     let baselineMM: Float
     let baselineDeg: Float
     /// 已矫正的左图（rectify 的输出，32BGRA）。给 C++ 后端读回像素用。
@@ -26,7 +32,7 @@ final class StereoFrame: @unchecked Sendable {
     private let rowStride: Int
     private let retained: [AnyObject]
 
-    init(color: MTLTexture, pairLeft: MTLTexture? = nil, right: MTLTexture?, target: DepthTarget, K: Intrinsics, image: CVPixelBuffer, gpuMs: Double, baselineMM: Float, baselineDeg: Float = 0, pairLeftPB: CVPixelBuffer? = nil, dir: Int32 = 1, retained: [AnyObject]) {
+    init(color: MTLTexture, pairLeft: MTLTexture? = nil, right: MTLTexture?, target: DepthTarget, K: Intrinsics, image: CVPixelBuffer, gpuMs: Double, baselineMM: Float, baselineDeg: Float = 0, pairLeftPB: CVPixelBuffer? = nil, dir: Int32 = 1, cpuMs: Double = 0, gpuRectifyMs: Double = 0, gpuDepthMs: Double = 0, retained: [AnyObject]) {
         self.color = color
         self.pairLeft = pairLeft
         self.right = right
@@ -38,6 +44,9 @@ final class StereoFrame: @unchecked Sendable {
         self.K = K
         self.image = image
         self.gpuMs = gpuMs
+        self.cpuMs = cpuMs
+        self.gpuRectifyMs = gpuRectifyMs
+        self.gpuDepthMs = gpuDepthMs
         self.baselineMM = baselineMM
         self.baselineDeg = baselineDeg
         self.pairLeftPB = pairLeftPB
@@ -118,8 +127,14 @@ final class StereoEngine: @unchecked Sendable {
     private var wideFOV: Float = 70, ultraFOV: Float = 108
     private(set) var hasExtrinsics = false
 
+    /// C++ 后端（第三层 → 第二层 → C 接口 → core/src/sgm.cpp）。
+    /// 只在相机数据队列上访问，所以不需要加锁。
+    private lazy var cpuCore: SVStereoCore? = SVStereoCore(maxDisparity: 64, p1: 8, p2: 96, uniqueness: 0.1, lrCheck: true)
+
     private final class Slot {
         let right, censusL, censusR, disp, cost, depthRolled: MTLTexture
+        /// CPU 后端的视差上传目标（.shared，可直接 replace(region:)）。
+        let dispCPU: MTLTexture
         let target: DepthTarget
 
         init(device: MTLDevice, w: Int, h: Int) {
@@ -135,6 +150,7 @@ final class StereoEngine: @unchecked Sendable {
             disp = tex(.r32Float)
             depthRolled = tex(.r32Float)
             cost = tex(.r32Float, shared: true)
+            dispCPU = tex(.r32Float, shared: true)
             target = DepthTarget(device: device, width: w, height: h)
         }
     }
@@ -315,6 +331,83 @@ final class StereoEngine: @unchecked Sendable {
         return StereoFrame(color: inp.wTex, pairLeft: lTex, right: slot.right, target: slot.target, K: g.K, image: inp.wpb,
                            gpuMs: ms, baselineMM: g.baselineMM, baselineDeg: g.baselineDeg,
                            pairLeftPB: lpb, dir: g.dir, retained: retained)
+    }
+
+    /// 与 `stereo(_:_:_:)` 同一条管线，但把 Census / SGM / WTA 交给 C++ 核心在 CPU 上跑。
+    ///
+    /// 分工（也就是诊断页上那张表）：
+    ///   矫正                GPU（沿用 Metal kernel，输入输出不变）
+    ///   读回像素            CPU（CVPixelBuffer 锁定 + MTLTexture.getBytes）
+    ///   Census/SGM/WTA      CPU（core/src/sgm.cpp）
+    ///   toDepth/unrectify   GPU（沿用 Metal kernel）
+    func stereoCPU(_ wide: CMSampleBuffer, _ ultra: CMSampleBuffer, _ s: PipelineSettings) -> StereoFrame? {
+        guard let inp = inputs(wide, ultra), let core = cpuCore else { return nil }
+        guard core.configure(maxDisparity: s.maxDisparity, p1: s.p1, p2: s.p2,
+                             uniqueness: s.uniqueness, lrCheck: s.lrCheck) else { return nil }
+
+        var lpb: CVPixelBuffer?
+        CVPixelBufferPoolCreatePixelBuffer(nil, leftPool, &lpb)
+        guard let lpb, let (lTex, lcv) = texture(lpb, writable: true) else { return nil }
+
+        slotIndex = (slotIndex + 1) % slots.count
+        let slot = slots[slotIndex]
+        let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), flip: s.flip, dy: s.yOffset)
+        let w = Self.workW, h = Self.workH
+
+        // ---- 1) 矫正：GPU ----
+        guard let cb1 = queue.makeCommandBuffer(), let enc1 = cb1.makeComputeCommandEncoder() else { return nil }
+        encodeRectify(enc1, inp.wTex, lTex, g.MW)
+        encodeRectify(enc1, inp.uTex, slot.right, g.MU)
+        enc1.endEncoding()
+        cb1.commit()
+        cb1.waitUntilCompleted()
+        let rectifyMs = (cb1.gpuEndTime - cb1.gpuStartTime) * 1000
+
+        // ---- 2) 读回像素 + C++ 匹配：CPU ----
+        CVPixelBufferLockBaseAddress(lpb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(lpb, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(lpb) else { return nil }
+
+        // 左图来自 32BGRA 的 CVPixelBuffer，右图是 .rgba8Unorm 纹理 —— 字节序不同，格式要分开声明。
+        let leftStride = CVPixelBufferGetBytesPerRow(lpb)
+        let rightStride = w * 4
+        let rightBytes = UnsafeMutablePointer<UInt8>.allocate(capacity: rightStride * h)
+        let disp = UnsafeMutablePointer<Float>.allocate(capacity: w * h)
+        defer {
+            rightBytes.deallocate()
+            disp.deallocate()
+        }
+        slot.right.getBytes(rightBytes, bytesPerRow: rightStride,
+                            from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+
+        let t0 = CACurrentMediaTime()
+        let ok = core.matchLeft(base.assumingMemoryBound(to: UInt8.self),
+                                leftStride: leftStride, leftFormat: .bgra8,
+                                right: UnsafePointer(rightBytes),
+                                rightStride: rightStride, rightFormat: .rgba8,
+                                width: w, height: h, direction: Int(g.dir),
+                                disparity: disp)
+        let cpuMs = (CACurrentMediaTime() - t0) * 1000
+        guard ok else { return nil }
+
+        // ---- 3) 视差上传 + toDepth + unrectify：GPU ----
+        slot.dispCPU.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
+                            withBytes: disp, bytesPerRow: w * 4)
+        guard let cb2 = queue.makeCommandBuffer(), let enc2 = cb2.makeComputeCommandEncoder() else { return nil }
+        var d = DepthParams(fB: g.fB, minZ: s.minZ, maxZ: s.maxZ, pad: 0)
+        dispatch(enc2, depthPSO, [slot.dispCPU, slot.depthRolled], bytes: &d, length: MemoryLayout<DepthParams>.stride)
+        var u = RectParams(M: g.MUp, srcSize: .zero)
+        dispatch(enc2, unrectPSO, [slot.depthRolled, slot.target.texture], bytes: &u, length: MemoryLayout<RectParams>.stride)
+        enc2.endEncoding()
+        cb2.commit()
+        cb2.waitUntilCompleted()
+        let depthMs = (cb2.gpuEndTime - cb2.gpuStartTime) * 1000
+
+        let retained: [AnyObject] = inp.keep + [lcv, wide]
+        return StereoFrame(color: inp.wTex, pairLeft: lTex, right: slot.right, target: slot.target, K: g.K, image: inp.wpb,
+                           gpuMs: rectifyMs + depthMs, baselineMM: g.baselineMM, baselineDeg: g.baselineDeg,
+                           pairLeftPB: lpb, dir: g.dir, cpuMs: cpuMs,
+                           gpuRectifyMs: rectifyMs, gpuDepthMs: depthMs, retained: retained)
     }
 
     func calibrate(_ wide: CMSampleBuffer, _ ultra: CMSampleBuffer, _ s: PipelineSettings) -> (flip: Bool, dy: Float) {

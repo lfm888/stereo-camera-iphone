@@ -80,15 +80,20 @@ struct HUD: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(model.mode.title).font(.headline)
-            Text("\(Int(model.fps)) fps · \(model.orientation.label)" + (model.source == .stereo ? String(format: " · GPU %.1f ms", model.gpuMs) : ""))
-            if model.source == .stereo {
+            Text("\(Int(model.fps)) fps · \(model.orientation.label)")
+            if model.source.isMultiCam {
                 Text(String(format: "B %.1f mm · β %+.0f° · f %.0f px", model.baselineMM, model.baselineDeg, model.K.fx))
-                Text(String(format: "Δy %.2f px%@", model.yOffset, model.flip ? " · ⇄" : "")
-                     + (model.matcher == .sgm ? " · SGM-4 · D \(model.maxDisparity)" + (model.lrCheck ? " · LR" : "") : " · Block · D \(model.maxDisparity)"))
+                if model.source == .cpuCore {
+                    Text("C++ core · D \(model.maxDisparity) · " + (model.lrCheck ? "LR" : "no-LR"))
+                } else {
+                    Text(String(format: "Δy %.2f px%@", model.yOffset, model.flip ? " · ⇄" : "")
+                         + (model.matcher == .sgm ? " · SGM-4 · D \(model.maxDisparity)" + (model.lrCheck ? " · LR" : "") : " · Block · D \(model.maxDisparity)"))
+                }
+                Text(model.gpuStagesSummary).foregroundStyle(.white.opacity(0.75))
             } else {
                 Text("\(model.source.title) · \(Int(model.depthSize.width))×\(Int(model.depthSize.height)) · f \(Int(model.K.fx)) px")
             }
-            if model.source == .stereo && !model.hasExtrinsics {
+            if model.source.isMultiCam && !model.hasExtrinsics {
                 Text("No lens extrinsics: assuming a side-by-side pair").foregroundStyle(.yellow)
             }
             if model.calibrating { Text("Epipolar auto-calibration…").foregroundStyle(.yellow) }
@@ -112,12 +117,13 @@ struct HUD: View {
 struct SidePanel: View {
     let model: AppModel
     @Binding var showSettings: Bool
+    @Binding var showDiagnostics: Bool
 
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 6) {
                 ForEach(ViewMode.allCases) { m in
-                    let disabled = model.source != .stereo && m.needsStereoPair
+                    let disabled = !model.source.providesRectifiedPair && m.needsStereoPair
                     button(m.icon, m.title, selected: model.mode == m) { model.mode = m }
                         .disabled(disabled)
                         .opacity(disabled ? 0.3 : 1)
@@ -130,10 +136,10 @@ struct SidePanel: View {
                     Text(model.source.short)
                         .font(.system(size: 10, weight: .heavy, design: .monospaced))
                         .frame(width: 50, height: 32)
-                        .background(model.source == .stereo ? Color.orange : model.source == .lidar ? Color.green : Color.blue, in: RoundedRectangle(cornerRadius: 8))
+                        .background(model.source == .stereo ? Color.orange : model.source == .cpuCore ? Color.purple : model.source == .lidar ? Color.green : Color.blue, in: RoundedRectangle(cornerRadius: 8))
                         .foregroundStyle(.white)
                 }
-                if model.source == .stereo {
+                if model.source.isMultiCam {
                     button("wand.and.stars", "Calibrate", selected: model.calibrating) { model.calibrate() }
                 }
                 button("camera.aperture", "Photo", selected: false) { model.capture.takePhoto() }
@@ -144,6 +150,7 @@ struct SidePanel: View {
                         .foregroundStyle(.red)
                 }
                 .accessibilityLabel(model.capture.isRecording ? "Stop recording" : "Record video")
+                button("waveform.path.ecg", "GPU / CPU diagnostics", selected: showDiagnostics) { showDiagnostics = true }
                 button("slider.horizontal.3", "Settings", selected: false) { showSettings = true }
             }
             .padding(.vertical, 10)
@@ -198,7 +205,7 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Auto-calibrate rectification") { model.calibrate(); dismiss() }
                 }
-                .disabled(model.source != .stereo)
+                .disabled(!model.source.isMultiCam)
                 Section("Source") {
                     Picker("Depth", selection: Binding(get: { model.source }, set: { model.setSource($0) })) {
                         ForEach(DepthSource.available) { Text($0.title).tag($0) }
