@@ -133,9 +133,6 @@ struct SidePanel: View {
                         .background(model.source == .stereo ? Color.orange : model.source == .lidar ? Color.green : Color.blue, in: RoundedRectangle(cornerRadius: 8))
                         .foregroundStyle(.white)
                 }
-                button(model.detection ? "viewfinder" : "viewfinder.trianglebadge.exclamationmark", "Detection", selected: model.detection) {
-                    model.detection.toggle()
-                }
                 if model.source == .stereo {
                     button("wand.and.stars", "Calibrate", selected: model.calibrating) { model.calibrate() }
                 }
@@ -202,12 +199,6 @@ struct SettingsView: View {
                     Button("Auto-calibrate rectification") { model.calibrate(); dismiss() }
                 }
                 .disabled(model.source != .stereo)
-                Section("Object detection") {
-                    Toggle("Enabled", isOn: $model.detection)
-                    Toggle("Show masks", isOn: $model.showMasks)
-                    slider("Min confidence", $model.confidence, 0.1...0.9, "%.2f")
-                    LabeledContent("Model", value: model.detectorName)
-                }
                 Section("Source") {
                     Picker("Depth", selection: Binding(get: { model.source }, set: { model.setSource($0) })) {
                         ForEach(DepthSource.available) { Text($0.title).tag($0) }

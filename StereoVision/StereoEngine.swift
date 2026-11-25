@@ -56,25 +56,6 @@ final class StereoFrame: @unchecked Sendable {
         UnsafePointer(buffer.contents().assumingMemoryBound(to: Float.self) + y * rowStride)
     }
 
-    func sample(_ m: Mask) -> Float? {
-        func set(_ x: Int, _ y: Int) -> Bool { x >= 0 && y >= 0 && x < m.w && y < m.h && m.bits[y * m.w + x] != 0 }
-        var inner: [Float] = [], all: [Float] = []
-        for y in 0..<m.h {
-            for x in 0..<m.w where set(x, y) {
-                let u = m.rect.minX + (CGFloat(x) + 0.5) / CGFloat(m.w) * m.rect.width
-                let v = m.rect.minY + (CGFloat(y) + 0.5) / CGFloat(m.h) * m.rect.height
-                let z = self.z(min(width - 1, Int(u * CGFloat(width))), min(height - 1, Int(v * CGFloat(height))))
-                guard z > 0 else { continue }
-                all.append(z)
-                if set(x - 1, y) && set(x + 1, y) && set(x, y - 1) && set(x, y + 1) { inner.append(z) }
-            }
-        }
-        var v = inner.count >= 8 ? inner : all
-        guard v.count >= 6 else { return nil }
-        v.sort()
-        return v[v.count / 2]
-    }
-
     func sample(_ r: CGRect, q: Float) -> Float? {
         let x0 = max(0, Int(r.minX * CGFloat(width))), x1 = min(width, Int(r.maxX * CGFloat(width)))
         let y0 = max(0, Int(r.minY * CGFloat(height))), y1 = min(height, Int(r.maxY * CGFloat(height)))

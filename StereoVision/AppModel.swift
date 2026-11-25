@@ -1,5 +1,4 @@
 import AVFoundation
-import ImageIO
 import Metal
 import Observation
 import QuartzCore
@@ -7,7 +6,7 @@ import UIKit
 import os
 
 enum ViewMode: Int, CaseIterable, Identifiable {
-    case standard, depth, overlay, disparity, stereoPair, anaglyph, segmentation, radar, pointCloud
+    case standard, depth, overlay, disparity, stereoPair, anaglyph, segmentation, pointCloud
     var id: Self { self }
 
     var title: String {
@@ -19,7 +18,6 @@ enum ViewMode: Int, CaseIterable, Identifiable {
         case .stereoPair: "Rectified pair"
         case .anaglyph: "Anaglyph"
         case .segmentation: "3D segmentation"
-        case .radar: "Bird's-eye"
         case .pointCloud: "Point cloud"
         }
     }
@@ -33,13 +31,27 @@ enum ViewMode: Int, CaseIterable, Identifiable {
         case .stereoPair: "rectangle.split.2x1"
         case .anaglyph: "eyeglasses"
         case .segmentation: "square.grid.3x3.fill"
-        case .radar: "scope"
         case .pointCloud: "cube.transparent"
         }
     }
 
     var needsStereoPair: Bool { self == .stereoPair || self == .anaglyph }
-    var shaderIndex: Int32 { Int32(min(rawValue, 7)) }
+
+    /// 显式映射，不用 rawValue：删过枚举项之后 rawValue 会前移，而着色器里的
+    /// mode 是固定编号（Shaders.metal 的 displayFragment）。之前用
+    /// `min(rawValue, 7)` 靠"Bird's-eye 恰好是 7"凑数，删掉它就错位了。
+    var shaderIndex: Int32 {
+        switch self {
+        case .standard: 0
+        case .depth: 1
+        case .overlay: 2
+        case .disparity: 3
+        case .stereoPair: 4
+        case .anaglyph: 5
+        case .segmentation: 6
+        case .pointCloud: 7   // 不走 displayFragment，Renderer 里单独分支
+        }
+    }
 }
 
 enum Matcher: String, CaseIterable, Identifiable, Sendable {
@@ -68,16 +80,6 @@ enum DisplayOrientation: Int, Sendable, CaseIterable {
         case .portrait: .portraitUpsideDown
         case .landscapeLeft: .landscapeLeft
         case .portraitUpsideDown: .portrait
-        }
-    }
-
-    /// 交给 Vision 的方向：它会先把 buffer 转正，再 crop/scale 给 CoreML。
-    var visionOrientation: CGImagePropertyOrientation {
-        switch self {
-        case .landscapeRight: .up
-        case .portrait: .right
-        case .landscapeLeft: .down
-        case .portraitUpsideDown: .left
         }
     }
 
@@ -127,16 +129,6 @@ enum DisplayOrientation: Int, Sendable, CaseIterable {
         let a = buffer(CGPoint(x: r.minX, y: r.minY)), b = buffer(CGPoint(x: r.maxX, y: r.maxY))
         return CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
     }
-
-    /// 相机坐标系里的 (x 偏移, y 偏移, 宽, 高) → 屏幕坐标系：竖屏时屏幕横向是相机的 y 轴。
-    func screenDims(x: Float, y: Float, width: Float, height: Float) -> (x: Float, width: Float, height: Float) {
-        switch self {
-        case .landscapeRight: (x, width, height)
-        case .portrait: (-y, height, width)
-        case .landscapeLeft: (-x, width, height)
-        case .portraitUpsideDown: (y, height, width)
-        }
-    }
 }
 
 struct PipelineSettings: Sendable {
@@ -150,8 +142,6 @@ struct PipelineSettings: Sendable {
     var maxDisparity = 64
     var yOffset: Float = 0
     var flip = false
-    var detection = true
-    var confidence: Float = 0.5
     var orient = DisplayOrientation.landscapeRight
     var calibrate = true
 }
@@ -180,7 +170,6 @@ final class FrameStore: @unchecked Sendable {
 
 final class Pipeline: @unchecked Sendable {
     let engine: StereoEngine
-    let detector = Detector()
     let store = FrameStore()
     let settings = OSAllocatedUnfairLock(initialState: PipelineSettings())
     var publish: ((FrameReport) -> Void)?
@@ -203,23 +192,21 @@ final class Pipeline: @unchecked Sendable {
             cal = c
         }
         guard let f = engine.stereo(wide, ultra, s) else { return }
-        finish(f, s, cal)
+        finish(f, cal)
     }
 
     func depthData(_ video: CMSampleBuffer, _ depth: AVDepthData) {
         let s = settings.withLock { $0 }
         guard let f = engine.depthData(video, depth, s) else { return }
-        finish(f, s, nil)
+        finish(f, nil)
     }
 
-    private func finish(_ f: StereoFrame, _ s: PipelineSettings, _ cal: (flip: Bool, dy: Float)?) {
+    private func finish(_ f: StereoFrame, _ cal: (flip: Bool, dy: Float)?) {
         store.latest = f
-        if s.detection { detector.submit(f.image, minConfidence: s.confidence, orientation: s.orient) }
-        let det = s.detection ? detector.latest : (seq: -1, items: [])
         let now = CACurrentMediaTime()
         stamps.append(now)
         stamps.removeAll { now - $0 > 1 }
-        let a = analyzer.analyze(f, detections: det.items, seq: det.seq, now: now)
+        let a = analyzer.analyze(f)
         publish?(FrameReport(analysis: a, fps: Double(stamps.count), gpuMs: f.gpuMs, baselineMM: f.baselineMM, baselineDeg: f.baselineDeg,
                              hasExtrinsics: engine.hasExtrinsics, K: f.K,
                              depthSize: CGSize(width: f.width, height: f.height),
@@ -240,11 +227,8 @@ final class AppModel {
     var lrCheck = true { didSet { push { $0.lrCheck = self.lrCheck } } }
     var p1: Float = 8 { didSet { push { $0.p1 = Int(self.p1) } } }
     var p2: Float = 96 { didSet { push { $0.p2 = Int(self.p2) } } }
-    var showMasks = true
     var yOffset: Float = 0 { didSet { push { $0.yOffset = self.yOffset } } }
     var flip = false { didSet { push { $0.flip = self.flip } } }
-    var detection = true { didSet { push { $0.detection = self.detection } } }
-    var confidence: Float = 0.5 { didSet { push { $0.confidence = self.confidence } } }
     var overlayAlpha: Float = 0.55
     var yaw: Float = 0
     var pitch: Float = 0
@@ -274,8 +258,6 @@ final class AppModel {
     @ObservationIgnored private var orientationObservers: [NSObjectProtocol] = []
     let capture = Capture()
     @ObservationIgnored private let camera = CameraController()
-
-    var detectorName: String { pipeline.detector.name }
 
     init() {
         let device = MTLCreateSystemDefaultDevice()!
@@ -372,7 +354,6 @@ final class AppModel {
             "uniqueness": uniqueness,
             "range_m": [minZ, maxZ],
             "rectification": ["flip": flip, "dy_px": yOffset, "baseline_angle_deg": baselineDeg, "camera_extrinsics": hasExtrinsics],
-            "detector": detectorName,
             "orientation": orientation.key,
         ]
     }

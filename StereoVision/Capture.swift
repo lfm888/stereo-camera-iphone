@@ -198,11 +198,12 @@ extension Capture {
         meta["depth"] = ["width": f.width, "height": f.height, "unit": "mm", "file": "depth_mm.png", "invalid": 0]
         meta["intrinsics"] = ["fx": f.K.fx, "fy": f.K.fy, "cx": f.K.cx, "cy": f.K.cy, "note": "pixel units of the depth map"]
         meta["baseline_mm"] = f.baselineMM
-        meta["objects"] = s.analysis.objects.map { o -> [String: Any] in
-            var d: [String: Any] = ["id": o.id, "label": o.label, "confidence": o.confidence,
-                                    "bbox_norm": [o.rect.minX, o.rect.minY, o.rect.width, o.rect.height]]
-            if let z = o.distance { d["distance_m"] = z; d["x_m"] = o.x; d["y_m"] = o.y; d["width_m"] = o.width; d["height_m"] = o.height }
-            return d
+        // 分割模型已删（见 test.md §15）：不再有语义物体，objects 保持空数组以兼容旧导出格式；
+        // 现在用的是纯传统的深度连通域面片块。
+        meta["objects"] = [] as [[String: Any]]
+        meta["blobs"] = s.analysis.blobs.map { b -> [String: Any] in
+            ["id": b.id, "distance_m": b.distance, "x_m": b.x, "width_m": b.width, "cells": b.cells,
+             "bbox_norm": [b.rect.minX, b.rect.minY, b.rect.width, b.rect.height]]
         }
         meta["point_cloud"] = "cloud.ply, camera frame: x right, y down, z forward, meters"
         try JSONSerialization.data(withJSONObject: meta, options: [.prettyPrinted, .sortedKeys]).write(to: dir.appendingPathComponent("meta.json"))

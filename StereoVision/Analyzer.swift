@@ -1,19 +1,6 @@
 import CoreGraphics
 
-struct TrackedObject: Identifiable, Sendable {
-    let id: Int
-    var rect: CGRect
-    var label: String
-    var confidence: Float
-    var lastSeen: Double
-    var mask: Mask?
-    var distance: Float?
-    var x: Float = 0
-    var y: Float = 0
-    var width: Float = 0
-    var height: Float = 0
-}
-
+/// 深度连通域切出来的一个「面片块」：3D segmentation 视图用它上色和标注。
 struct Blob: Identifiable, Sendable {
     let id: Int
     var rect: CGRect
@@ -23,70 +10,27 @@ struct Blob: Identifiable, Sendable {
     var cells: Int
 }
 
+/// 每帧的分析结果。**只来自深度图**，不依赖任何检测/分割模型。
 struct Analysis: Sendable {
-    var objects: [TrackedObject] = []
     var blobs: [Blob] = []
-    var scan: [Float] = []
     var labels: [UInt8] = []
     var gridW = 0
     var gridH = 0
     var center: Float?
 }
 
+/// 纯传统方法的后处理：把深度图降采样成网格，按深度连续性做 4 邻域连通域，
+/// 得到「3D segmentation」用的标签图，以及每个面片块的距离与宽度。
+///
+/// 全部是逐像素数组运算，没有 Apple 依赖（除了 CGRect），是搬到
+/// `core/` 里最直接的一个模块——见 test.md §15.1。
 final class Analyzer {
-    private var tracks: [TrackedObject] = []
-    private var nextID = 1
-    private var lastSeq = -1
-
-    func analyze(_ f: StereoFrame, detections: [Detection], seq: Int, now: Double) -> Analysis {
-        if seq != lastSeq {
-            lastSeq = seq
-            associate(detections, now)
-        }
-        tracks.removeAll { now - $0.lastSeen > 0.7 }
-        for i in tracks.indices { measure(&tracks[i], f) }
-
+    func analyze(_ f: StereoFrame) -> Analysis {
         var a = Analysis()
-        a.objects = tracks
+        // 准星读数：画面中心那一小块深度的中值
         a.center = f.sample(CGRect(x: 0.475, y: 0.455, width: 0.05, height: 0.09), q: 0.5)
         grid(f, &a)
         return a
-    }
-
-    private func associate(_ dets: [Detection], _ now: Double) {
-        var used = Set<Int>()
-        for d in dets {
-            var bi = -1
-            var bv: CGFloat = 0.25
-            for (i, t) in tracks.enumerated() where !used.contains(i) && t.label == d.label {
-                let v = iou(t.rect, d.rect)
-                if v > bv { bv = v; bi = i }
-            }
-            if bi >= 0 {
-                let o = tracks[bi].rect
-                tracks[bi].rect = CGRect(x: o.minX + (d.rect.minX - o.minX) * 0.6, y: o.minY + (d.rect.minY - o.minY) * 0.6,
-                                         width: o.width + (d.rect.width - o.width) * 0.6, height: o.height + (d.rect.height - o.height) * 0.6)
-                tracks[bi].confidence = d.confidence
-                tracks[bi].mask = d.mask
-                tracks[bi].lastSeen = now
-                used.insert(bi)
-            } else {
-                tracks.append(TrackedObject(id: nextID, rect: d.rect, label: d.label, confidence: d.confidence, lastSeen: now, mask: d.mask))
-                used.insert(tracks.count - 1)
-                nextID += 1
-            }
-        }
-    }
-
-    private func measure(_ t: inout TrackedObject, _ f: StereoFrame) {
-        let inner = t.rect.insetBy(dx: t.rect.width * 0.2, dy: t.rect.height * 0.2)
-        guard let z = t.mask.flatMap({ f.sample($0) }) ?? f.sample(inner, q: 0.3) else { return }
-        let d: Float = if let p = t.distance, abs(p - z) < 0.4 * p { p + (z - p) * 0.35 } else { z }
-        t.distance = d
-        t.x = (Float(t.rect.midX) * Float(f.width) - f.K.cx) * d / f.K.fx
-        t.y = (Float(t.rect.midY) * Float(f.height) - f.K.cy) * d / f.K.fy
-        t.width = Float(t.rect.width) * Float(f.width) * d / f.K.fx
-        t.height = Float(t.rect.height) * Float(f.height) * d / f.K.fy
     }
 
     private func grid(_ f: StereoFrame, _ a: inout Analysis) {
@@ -106,16 +50,6 @@ final class Analyzer {
                 }
                 if c * 2 >= step * step { g[gy * gw + gx] = s / Float(c) }
             }
-        }
-
-        var scan = [Float](repeating: 0, count: gw)
-        for gx in 0..<gw {
-            var m = Float.infinity
-            for gy in (gh * 3 / 10)..<(gh * 7 / 10) {
-                let v = g[gy * gw + gx]
-                if v > 0 && v < m { m = v }
-            }
-            scan[gx] = m.isFinite ? m : 0
         }
 
         struct Comp { var id: Int32; var count = 0; var sumZ: Float = 0; var sumX = 0; var x0 = Int.max, y0 = Int.max, x1 = 0, y1 = 0 }
@@ -162,6 +96,5 @@ final class Analyzer {
         a.labels = lab.map { remap[$0] ?? 0 }
         a.gridW = gw
         a.gridH = gh
-        a.scan = scan
     }
 }
