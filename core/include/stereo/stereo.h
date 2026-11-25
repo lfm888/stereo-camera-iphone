@@ -1,7 +1,7 @@
 /*
  * stereo/stereo.h — 跨平台立体匹配库的**纯 C 接口**（三层架构的边界）
  *
- *   第一层  C++（core/src/*.cpp）       : census / costVolume / sgmPath / wta / depth
+ *   第一层  C++（core/src 下的 .cpp）     : census / costVolume / sgmPath / wta / depth
  *   第二层  C / Objective-C++（中间层）  : 生命周期、像素格式、与平台框架（CoreVideo/Metal）的接触面
  *   第三层  Swift / 任意语言             : 通过本头文件直接调用（有桥接头即可）
  *

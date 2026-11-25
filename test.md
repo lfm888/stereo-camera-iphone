@@ -732,3 +732,92 @@ cmake --build build/core --config Release
    但注意 `Section("Stereo matching")` 后面的 `.disabled(model.source != .stereo)` 修饰符仍然挂在它身上（正确）。
 3. `Capture.export` 里 `meta["objects"] = [] as [[String: Any]]` 的写法；
    如果 `JSONSerialization` 对空数组的桥接有问题，改成 `[Any]()` 即可。
+
+---
+
+# 17. 三层框架已跑通（CI 验证通过）
+
+## 17.1 现在的结构
+
+```
+第一层  C++（由 Apple clang 编译）
+  core/include/stereo/stereo.h     纯 C 接口：POD 结构体 + 不透明句柄，唯一对外契约
+  core/include/stereo/sgm.hpp      C++ 内部声明（含 SgmParams）
+  core/src/sgm.cpp                 census / costVolume / sgmPath×4 / wtaRight / wtaLeft / toDepth
+  core/src/stereo_api.cpp          C 门面：参数校验 + 缓冲区按尺寸复用 + 翻译成算法调用
+
+第二层  C / Objective-C++（中间层）
+  StereoVision/StereoVision-Bridging-Header.h   Swift 只看这里（不许出现任何 C++ 类型）
+  StereoVision/Bridge/StereoCoreBridge.h        纯 ObjC 接口（只 import Foundation）
+  StereoVision/Bridge/StereoCoreBridge.mm       持有 stereo_context、翻译 stereo_image、错误转 NSString
+
+第三层  Swift（前端）
+  StereoVision/AppModel.swift      runCoreSelfTest()：取像素 → 调中间层 → 报耗时/有效率
+  StereoVision/StereoEngine.swift  StereoFrame 暴露 pairLeftPB（已矫正左图）与 dir（匹配方向）
+  StereoVision/ContentView.swift   设置页「C++ core」一节，结果写进 HUD
+```
+
+调用链是一次真实的穿透，不是占位：
+
+```
+Swift（锁 CVPixelBuffer / MTLTexture.getBytes）
+  → SVStereoCore.matchLeft(...)          ObjC++ 层，负责生命周期与像素格式
+    → stereo_match(...)                  纯 C 接口
+      → census → cost_volume → sgm_all_paths → wta_right → wta_left   C++ 算法
+```
+
+## 17.2 CI 结果（2026-11-25，commit `03dd88c`）
+
+| 流水线 | 结果 | 内容 |
+|---|---|---|
+| **Build C++ core** | ✅ 三平台全绿 | `ubuntu-latest` / `windows-latest` / `macos-15-intel` 各编译一遍，12 项逐位对拍 + C API 冒烟全过 |
+| **Build unsigned IPA** | ✅ 成功 | Apple clang 编译 `sgm.cpp` + `stereo_api.cpp`，ObjC++ 桥接，Swift 前端，产出未签名 IPA |
+
+三个平台的标量基准（tiny 向量 64×48/D=16，仅供参考机器快慢）：
+
+| runner | 合计 |
+|---|---|
+| ubuntu-latest | 1.58 ms |
+| windows-latest | 2.13 ms |
+| macos-15-intel | 1.36 ms |
+
+**这一步验证了最关键的三个前提**：
+
+1. C++ 核心在 **Apple clang + iOS SDK** 下能编（CI 的 IPA job 真的编了 `sgm.cpp` / `stereo_api.cpp`）；
+2. 纯 C 头能同时被 **C 编译器**（`c_api_smoke.c`）、**ObjC++**（桥接的 `.mm`）、**Swift 桥接头**使用；
+3. 同一份 C++ 代码在 Windows / Linux / macOS 三平台输出**逐位相同**。
+
+## 17.3 这一轮踩到并修掉的坑
+
+| 问题 | 现象 | 修法 |
+|---|---|---|
+| `.xcodeproj` 陈旧 | `Build input file cannot be found: Detector.swift` | CI 不跑 xcodegen，删源码必须同步改 pbxproj（删 4 处引用 + CoreML 的 shell script phase） |
+| `gnu++14` | `inline constexpr` 编译失败 | 工程级 `CLANG_CXX_LANGUAGE_STANDARD = gnu++20` |
+| `stereo_match` 漏了 `disp_stride <= 0` 的默认值 | 只有最后一行被写入，C API 对拍全错 | 补 `if (disp_stride <= 0) disp_stride = W;` |
+| `max_disp` 校验过严（只允许 32/64/96） | tiny 向量（D=16）跑不了 | 库层放宽成 4..96；三档是 App 的 UI 约定，不是算法约束 |
+| MSVC 只给 C++ 目标加了 `/utf-8` | `c_api_smoke.c`（纯 C）中文注释把字符串字面量"吃掉" | 改成全局 `add_compile_options(/utf-8)` |
+| `'/*' within block comment` | `stereo.h` 头部注释里写了 `core/src/*.cpp` | 改成「core/src 下的 .cpp」 |
+| Swift 6 并发警告 | `Task.detached { [weak self] ... }` 捕获 `self` | 改成 `Task { @MainActor in ... await Task.detached { Static } .value }`，detached 里不捕 self |
+
+## 17.4 一个容易错的细节：两幅配准图的字节序**不同**
+
+同一个 `rectify` kernel 写给两种纹理，但格式不一样：
+
+| | 来源 | 纹理格式 | 内存字节序 |
+|---|---|---|---|
+| 左图 | `leftPool` 的 `CVPixelBuffer`（32BGRA） | `bgra8Unorm` | **B,G,R,A** |
+| 右图 | `slot.right` | `rgba8Unorm` | **R,G,B,A** |
+
+所以 `stereo_image.format` 必须逐图声明（左 `BGRA8`、右 `RGBA8`）。灰度测试图上无所谓，
+真实彩色帧上通道搞反会让亮度算错、Census 位翻转。这也是为什么 C 接口的格式字段是**每幅图一个**，
+而不是整个 context 一个。
+
+## 17.5 还没做的（下一步）
+
+| # | 事项 | 说明 |
+|---|---|---|
+| 1 | **独立静态库 target `StereoCore`** | 现在 C++ 是直接编进 App target（Apple clang 编的，但没有单独的 `.a`）。CMake 在桌面端已经产出 `libstereo_core.a`。要做成 Xcode 里的 static-library target，需要新增 PBXNativeTarget + 依赖 + Frameworks phase（本项目 CI 不跑 xcodegen，只能手写 pbxproj 或由你在有 xcodegen 的机器上生成） |
+| 2 | 接成**第四个深度来源**「自研（C++ CPU）」 | 现在自检按钮跑完就丢；正式接入要把 `SVStereoCore` 挂到 `Pipeline` 上复用 context，并把 `disp` 上传成纹理走现有的 `toDepth` + `unrectifyDepth` |
+| 3 | 真机自检数据 | 上面三个基准都是 CI runner；iPhone 上的标量耗时还没测（README 的 GPU 版是 20–22 fps） |
+| 4 | `match`（5×5 块匹配）与 `calibrate` 的 C++ 版 | 见 §15.2 Q2：`sgm_ref.py` 也没翻译 `rectify` / `unrectifyDepth` / `calibrate` |
+| 5 | `census` / `wta` 偏移表 + `sgmPath` SIMD | 见 `core/README.md` 的基准与顺序 |

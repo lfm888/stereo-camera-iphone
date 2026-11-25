@@ -374,9 +374,14 @@ final class AppModel {
     func runCoreSelfTest() {
         status = "C++ core: 正在跑…"
         let frame = pipeline.store.latest
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let msg = Self.coreSelfTest(frame)
-            await MainActor.run { self?.status = msg }
+        // 两段任务：后台跑算法（不捕获 self），回到 MainActor 再写 status。
+        // 这样不会出现 Swift 6 的 “reference to captured var 'self' in
+        // concurrently-executing code” 错误。
+        Task { @MainActor in
+            let msg = await Task.detached(priority: .userInitiated) {
+                Self.coreSelfTest(frame)
+            }.value
+            status = msg
         }
     }
 
