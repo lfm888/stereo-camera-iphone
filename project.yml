@@ -12,8 +12,14 @@ targets:
       Release: Config/Base.xcconfig
     sources:
       - path: StereoVision
+      - path: core/src
+      - path: core/include
     settings:
       base:
+        SWIFT_OBJC_BRIDGING_HEADER: StereoVision/StereoVision-Bridging-Header.h
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/core/include"
+        CLANG_CXX_LANGUAGE_STANDARD: gnu++20
+        CLANG_CXX_LIBRARY: libc++
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1"

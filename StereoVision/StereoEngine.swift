@@ -18,11 +18,15 @@ final class StereoFrame: @unchecked Sendable {
     let gpuMs: Double
     let baselineMM: Float
     let baselineDeg: Float
+    /// 已矫正的左图（rectify 的输出，32BGRA）。给 C++ 后端读回像素用。
+    let pairLeftPB: CVPixelBuffer?
+    /// 匹配方向：+1 表示右图的同名点在左图右侧（来自 geometry 的 t.x）。
+    let dir: Int32
     private let buffer: MTLBuffer
     private let rowStride: Int
     private let retained: [AnyObject]
 
-    init(color: MTLTexture, pairLeft: MTLTexture? = nil, right: MTLTexture?, target: DepthTarget, K: Intrinsics, image: CVPixelBuffer, gpuMs: Double, baselineMM: Float, baselineDeg: Float = 0, retained: [AnyObject]) {
+    init(color: MTLTexture, pairLeft: MTLTexture? = nil, right: MTLTexture?, target: DepthTarget, K: Intrinsics, image: CVPixelBuffer, gpuMs: Double, baselineMM: Float, baselineDeg: Float = 0, pairLeftPB: CVPixelBuffer? = nil, dir: Int32 = 1, retained: [AnyObject]) {
         self.color = color
         self.pairLeft = pairLeft
         self.right = right
@@ -36,6 +40,8 @@ final class StereoFrame: @unchecked Sendable {
         self.gpuMs = gpuMs
         self.baselineMM = baselineMM
         self.baselineDeg = baselineDeg
+        self.pairLeftPB = pairLeftPB
+        self.dir = dir
         self.retained = retained
     }
 
@@ -307,7 +313,8 @@ final class StereoEngine: @unchecked Sendable {
         // depth map un-rolled onto it; the rectified pair stays available for the epipolar check.
         let retained: [AnyObject] = inp.keep + [lcv, wide]
         return StereoFrame(color: inp.wTex, pairLeft: lTex, right: slot.right, target: slot.target, K: g.K, image: inp.wpb,
-                           gpuMs: ms, baselineMM: g.baselineMM, baselineDeg: g.baselineDeg, retained: retained)
+                           gpuMs: ms, baselineMM: g.baselineMM, baselineDeg: g.baselineDeg,
+                           pairLeftPB: lpb, dir: g.dir, retained: retained)
     }
 
     func calibrate(_ wide: CMSampleBuffer, _ ultra: CMSampleBuffer, _ s: PipelineSettings) -> (flip: Bool, dy: Float) {

@@ -10,6 +10,7 @@
 //      与存档的 disp/depth 比（检验 rgb_to_luma 的实现是否与 numpy 一致）。
 
 #include "stereo/sgm.hpp"
+#include "stereo/stereo.h"
 #include "npy.hpp"
 
 #include <algorithm>
@@ -195,7 +196,38 @@ int main(int argc, char** argv) {
         for (float z : disp) nvalid += (z > 0.0f) ? 1 : 0;
         std::printf("\n有效视差 %.1f%%  (%zu/%zu)\n", 100.0 * double(nvalid) / double(n_pix), nvalid, n_pix);
 
-        // ---------------- C) 标量基准（不含 IO）----------------
+        // ---------------- C) 纯 C 接口（三层架构的边界）----------------
+        {
+            stereo_config cfg;
+            stereo_config_default(&cfg);
+            cfg.max_disp = D;
+            cfg.p1 = static_cast<int>(p.P1);
+            cfg.p2 = static_cast<int>(p.P2);
+            cfg.uniqueness = p.uniqueness;
+            cfg.lr_check = p.lrCheck;
+
+            stereo_context *ctx = stereo_create();
+            std::vector<float> disp_c(n_pix, -1.0f), depth_c(n_pix, -1.0f);
+            const stereo_image li{left_u8.data(), W, H, W * 3, STEREO_FORMAT_RGB8};
+            const stereo_image ri{right_u8.data(), W, H, W * 3, STEREO_FORMAT_RGB8};
+
+            int rc = -1;
+            if (ctx != nullptr) {
+                rc = stereo_configure(ctx, &cfg);
+                if (rc == 0) rc = stereo_match(ctx, &li, &ri, 1, disp_c.data(), 0);
+                if (rc == 0) {
+                    rc = stereo_disparity_to_depth(ctx, disp_c.data(), 0, W, H, fB, minZ, maxZ,
+                                                   depth_c.data(), 0);
+                }
+            }
+            report("c_api stereo_match", rc == 0 && same_bytes(disp_c, g_disp, &bad, &nd),
+                   rc != 0 ? std::string("rc=") + std::to_string(rc) + " " + stereo_last_error(ctx)
+                           : "");
+            report("c_api to_depth", rc == 0 && same_bytes(depth_c, g_depth, &bad, &nd), "");
+            stereo_destroy(ctx);
+        }
+
+        // ---------------- D) 标量基准（不含 IO）----------------
         using clock = std::chrono::steady_clock;
         const int iters = 5;
         auto bench = [&](const char* name, auto&& fn) {

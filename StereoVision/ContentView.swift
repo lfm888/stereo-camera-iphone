@@ -209,6 +209,11 @@ struct SettingsView: View {
                     LabeledContent("Principal point", value: String(format: "%.1f, %.1f", model.K.cx, model.K.cy))
                     LabeledContent("Depth map", value: "\(Int(model.depthSize.width))×\(Int(model.depthSize.height))")
                 }
+                Section("C++ core") {
+                    Button("在最新一帧上跑一次 CPU SGM") { model.runCoreSelfTest() }
+                    Text("Swift → ObjC++ 中间层 → 纯 C 接口 → C++ 算法。结果会显示在 HUD 左上角。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

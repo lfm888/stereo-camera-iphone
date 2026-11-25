@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreVideo
 import Metal
 import Observation
 import QuartzCore
@@ -356,6 +357,66 @@ final class AppModel {
             "rectification": ["flip": flip, "dy_px": yOffset, "baseline_angle_deg": baselineDeg, "camera_extrinsics": hasExtrinsics],
             "orientation": orientation.key,
         ]
+    }
+
+    // MARK: - 三层框架自检（Swift → ObjC++ → C API → C++）
+
+    /// 在最新一帧**已矫正**的左右图上跑一次 CPU SGM，把耗时与有效率写进 HUD。
+    ///
+    /// 这条路径经过三层：
+    ///   Swift（这里，负责从 CVPixelBuffer / MTLTexture 取像素）
+    ///     → SVStereoCore（Bridge/StereoCoreBridge.mm，负责生命周期与格式）
+    ///     → stereo_match（core/include/stereo/stereo.h 的纯 C 接口）
+    ///     → C++ 算法（core/src/sgm.cpp）
+    ///
+    /// 真接成第四个深度来源时，应该把 SVStereoCore 挂到 Pipeline 上复用
+    /// （它的内部缓冲区按尺寸复用，第一帧之后零分配）。
+    func runCoreSelfTest() {
+        status = "C++ core: 正在跑…"
+        let frame = pipeline.store.latest
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let msg = Self.coreSelfTest(frame)
+            await MainActor.run { self?.status = msg }
+        }
+    }
+
+    nonisolated private static func coreSelfTest(_ f: StereoFrame?) -> String {
+        guard let f, let pb = f.pairLeftPB, let right = f.right else { return "C++ core: 还没有可用帧" }
+        guard let core = SVStereoCore(maxDisparity: 64, p1: 8, p2: 96, uniqueness: 0.1, lrCheck: true) else {
+            return "C++ core: 初始化失败"
+        }
+
+        let w = f.width, h = f.height
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pb) else { return "C++ core: 拿不到左图" }
+
+        // 左图是 32BGRA 的 CVPixelBuffer（rectify 用 bgra8Unorm 纹理写进去的），
+        // 右图是 .rgba8Unorm 的共享纹理 —— 两幅图的字节序不同，必须分开声明格式。
+        let leftStride = CVPixelBufferGetBytesPerRow(pb)
+        let rightStride = w * 4
+        let rightBytes = UnsafeMutablePointer<UInt8>.allocate(capacity: rightStride * h)
+        defer { rightBytes.deallocate() }
+        right.getBytes(rightBytes, bytesPerRow: rightStride,
+                       from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+
+        let disp = UnsafeMutablePointer<Float>.allocate(capacity: w * h)
+        defer { disp.deallocate() }
+
+        let t0 = CACurrentMediaTime()
+        let ok = core.matchLeft(base.assumingMemoryBound(to: UInt8.self),
+                                leftStride: leftStride, leftFormat: .bgra8,
+                                right: UnsafePointer(rightBytes),
+                                rightStride: rightStride, rightFormat: .rgba8,
+                                width: w, height: h, direction: Int(f.dir),
+                                disparity: disp)
+        let ms = (CACurrentMediaTime() - t0) * 1000
+        guard ok else { return "C++ core: \(core.lastError)" }
+
+        var valid = 0
+        for i in 0 ..< (w * h) where disp[i] > 0 { valid += 1 }
+        return String(format: "C++ core: %.1f ms · 有效 %.1f%% · %d×%d D=%d",
+                      ms, 100.0 * Double(valid) / Double(w * h), w, h, core.maxDisparity)
     }
 
     func resetOrbit() {

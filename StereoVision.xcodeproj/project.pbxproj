@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DE0001000000000000B001 /* sgm.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0001000000000000F001 /* sgm.cpp */; };
+		C0DE0001000000000000B002 /* stereo_api.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0001000000000000F002 /* stereo_api.cpp */; };
+		C0DE0001000000000000B003 /* StereoCoreBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0001000000000000F006 /* StereoCoreBridge.mm */; };
 		0A8885C208F8AF47A1DEF51B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DD47C900CDA69F349F2E7F05 /* Assets.xcassets */; };
 		25121C3183A3A939B562FD37 /* StereoEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBEB6373DDF5AFD89798702 /* StereoEngine.swift */; };
 		303596F04684BEEC1FD9B97E /* OverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DA425104A6DE48AF50AE289 /* OverlayView.swift */; };
@@ -20,6 +23,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		C0DE0001000000000000F001 /* sgm.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "core/src/sgm.cpp"; sourceTree = "<group>"; };
+		C0DE0001000000000000F002 /* stereo_api.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "core/src/stereo_api.cpp"; sourceTree = "<group>"; };
+		C0DE0001000000000000F003 /* sgm.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.h; path = "core/include/stereo/sgm.hpp"; sourceTree = "<group>"; };
+		C0DE0001000000000000F004 /* stereo.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "core/include/stereo/stereo.h"; sourceTree = "<group>"; };
+		C0DE0001000000000000F005 /* StereoCoreBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "StereoVision/Bridge/StereoCoreBridge.h"; sourceTree = "<group>"; };
+		C0DE0001000000000000F006 /* StereoCoreBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = "StereoVision/Bridge/StereoCoreBridge.mm"; sourceTree = "<group>"; };
+		C0DE0001000000000000F007 /* StereoVision-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "StereoVision/StereoVision-Bridging-Header.h"; sourceTree = "<group>"; };
 		1921C3786C3FB672A67C7E9B /* Capture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Capture.swift; sourceTree = "<group>"; };
 		2DA425104A6DE48AF50AE289 /* OverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayView.swift; sourceTree = "<group>"; };
 		6E909856B28ECAC981F8F9C1 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
@@ -64,6 +74,13 @@
 			isa = PBXGroup;
 			children = (
 				AE69FD9BB0204AB135F044F8 /* Config */,
+				C0DE0001000000000000F001 /* sgm.cpp */,
+				C0DE0001000000000000F002 /* stereo_api.cpp */,
+				C0DE0001000000000000F003 /* sgm.hpp */,
+				C0DE0001000000000000F004 /* stereo.h */,
+				C0DE0001000000000000F005 /* StereoCoreBridge.h */,
+				C0DE0001000000000000F006 /* StereoCoreBridge.mm */,
+				C0DE0001000000000000F007 /* StereoVision-Bridging-Header.h */,
 				05D287F19F714018EE24FA6D /* StereoVision */,
 				0BEC2C27F5161176C7C5FB9B /* Products */,
 			);
@@ -149,6 +166,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+			C0DE0001000000000000B001 /* sgm.cpp in Sources */,
+			C0DE0001000000000000B002 /* stereo_api.cpp in Sources */,
+			C0DE0001000000000000B003 /* StereoCoreBridge.mm in Sources */,
 				C00FAEBD9221E735877A6B2B /* Analyzer.swift in Sources */,
 				4A938EB4B82503C00D57E3D0 /* AppModel.swift in Sources */,
 				CD63C1D3316EB9A56D11FB12 /* CameraController.swift in Sources */,
@@ -229,6 +249,11 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/core/include",
+				);
+				SWIFT_OBJC_BRIDGING_HEADER = "StereoVision/StereoVision-Bridging-Header.h";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = StereoVision;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
@@ -261,6 +286,11 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/core/include",
+				);
+				SWIFT_OBJC_BRIDGING_HEADER = "StereoVision/StereoVision-Bridging-Header.h";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = StereoVision;
 				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
