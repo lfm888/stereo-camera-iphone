@@ -1,0 +1,137 @@
+{
+  "generator": "tools/gen_golden.py",
+  "sgm_ref": "tools/sgm_ref.py",
+  "numpy": "1.26.4",
+  "size": "tiny",
+  "seed": 0,
+  "params": {
+    "W": 64,
+    "H": 48,
+    "D": 16,
+    "dir": 1,
+    "P1": 8,
+    "P2": 96,
+    "uniqueness": 0.1,
+    "lrCheck": 1,
+    "fB": 0.66,
+    "minZ": 0.12,
+    "maxZ": 3.0
+  },
+  "note": "left/right 是合成场景，等价于 rectify 之后的输入。census 用 uint64：bit k = 第 k 个邻居（dy 外层、dx 内层，跳过中心），与 Metal 的 bits.x/bits.y 在 XOR+popcount 下等价。",
+  "arrays": {
+    "left_u8": {
+      "file": "left_u8.npy",
+      "shape": [
+        48,
+        64,
+        3
+      ],
+      "dtype": "uint8",
+      "bytes": 9216,
+      "sha256": "b7b73ab6632be931ffc9e40a6d7b5748f4daf43a648ee9e84022befadf6ddf36"
+    },
+    "right_u8": {
+      "file": "right_u8.npy",
+      "shape": [
+        48,
+        64,
+        3
+      ],
+      "dtype": "uint8",
+      "bytes": 9216,
+      "sha256": "40c60b5d7d23b3b188d200f88a531e2b881469fabbc484a66c22d804655c17f9"
+    },
+    "luma_f32": {
+      "file": "luma_f32.npy",
+      "shape": [
+        48,
+        64
+      ],
+      "dtype": "float32",
+      "bytes": 12288,
+      "sha256": "c0e7786943a0819f67de151b949cbdc92bda368d256eac93d2ca7b0a88dfbce9"
+    },
+    "censusL_u64": {
+      "file": "censusL_u64.npy",
+      "shape": [
+        48,
+        64
+      ],
+      "dtype": "uint64",
+      "bytes": 24576,
+      "sha256": "8a89533d0e7e9a33ddb39bc978a4ae10aa6b9b4f2604d28c67b9eb8f427f40f7"
+    },
+    "censusR_u64": {
+      "file": "censusR_u64.npy",
+      "shape": [
+        48,
+        64
+      ],
+      "dtype": "uint64",
+      "bytes": 24576,
+      "sha256": "baf301ddcb148d62a6e4a5f10b38cd1ae7bb359a9387a26de565a1af89323346"
+    },
+    "cost_u8": {
+      "file": "cost_u8.npy",
+      "shape": [
+        48,
+        64,
+        16
+      ],
+      "dtype": "uint8",
+      "bytes": 49152,
+      "sha256": "a52e3a6c2b1e4ee69236d969eec9a5f78c375e9a7c923b11e771376a9a0998f6"
+    },
+    "sum_u16": {
+      "file": "sum_u16.npy",
+      "shape": [
+        48,
+        64,
+        16
+      ],
+      "dtype": "uint16",
+      "bytes": 98304,
+      "sha256": "9210d3ff92a55cbd28df31a9631dea5ad2334615fce2edb6f0bfd57c989478c8"
+    },
+    "truth_f32": {
+      "file": "truth_f32.npy",
+      "shape": [
+        48,
+        64
+      ],
+      "dtype": "float32",
+      "bytes": 12288,
+      "sha256": "8e1c44038283c6577ae793854ede13d55ae83bf3eef9624fcc7821531a1d647d"
+    },
+    "dispR_f32": {
+      "file": "dispR_f32.npy",
+      "shape": [
+        48,
+        64
+      ],
+      "dtype": "float32",
+      "bytes": 12288,
+      "sha256": "66f07c8993aaa06b25ecb74757b7c9923be93ec213fccdabdc545ccc4ff955c7"
+    },
+    "disp_f32": {
+      "file": "disp_f32.npy",
+      "shape": [
+        48,
+        64
+      ],
+      "dtype": "float32",
+      "bytes": 12288,
+      "sha256": "f7a1771a7de26a5f1c26d0e10bc1bb0576d35505c7a977baf484621ee2bb48e5"
+    },
+    "depth_f32": {
+      "file": "depth_f32.npy",
+      "shape": [
+        48,
+        64
+      ],
+      "dtype": "float32",
+      "bytes": 12288,
+      "sha256": "7952c2cc9423c625ec9bdac9d3e0e118e5bd1b96e70b04aa39992ca2640817c3"
+    }
+  }
+}

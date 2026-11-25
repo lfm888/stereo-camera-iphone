@@ -15,3 +15,7 @@ Config/Local.xcconfig
 
 
 __pycache__/
+
+# 生成的测试向量（tiny 那份提交，其余本地生成）
+core/tests/golden-small/
+core/tests/golden-full/

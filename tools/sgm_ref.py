@@ -432,13 +432,17 @@ def match_block(cl: np.ndarray, cr: np.ndarray, p: SGMParams) -> np.ndarray:
 # ============================================================================
 # 8. 合成场景 —— 逐字对应 scripts/verify_stereo.swift:20-60
 # ============================================================================
-def synthetic_scene(seed: int = 0):
+def synthetic_scene(seed: int = 0, w: int = WORK_W, h: int = WORK_H):
     """
     斜面 d = 8 + y/H*6、矩形 d = 30、y∈[200,330) 一条对比度仅 4% 的低纹理带。
     返回 (left_rgb, right_rgb) 各 (H,W,3) float32 in [0,1]，以及 truth(x,y)。
+
+    w/h 可缩小场景做小尺寸测试向量（tools/gen_golden.py）；默认 640x360 时
+    矩形与低纹理带的位置与 scripts/verify_stereo.swift 完全一致。
     """
-    h, w = WORK_H, WORK_W
     rng = np.random.default_rng(seed)
+    # 真值区域按默认分辨率等比缩放，默认值下 sx = sy = 1.0（逐位不变）
+    sx, sy = w / WORK_W, h / WORK_H
     tex_w = w + 64
 
     base = rng.random((h, tex_w), dtype=np.float32)
@@ -451,11 +455,11 @@ def synthetic_scene(seed: int = 0):
         x0 = np.clip(xf.astype(np.int32), 0, tex_w - 2)
         f = xf.astype(np.float32) - x0
         v = blurred[y, x0] * (1 - f) + blurred[y, x0 + 1] * f
-        contrast = np.where((y > 200) & (y < 330), 0.04, 1.0).astype(np.float32)
+        contrast = np.where((y > 200 * sy) & (y < 330 * sy), 0.04, 1.0).astype(np.float32)
         return np.float32(0.5) + (v - np.float32(0.5)) * contrast
 
     def truth(x, y):
-        rect = (x >= 260) & (x < 420) & (y >= 110) & (y < 250)
+        rect = (x >= 260 * sx) & (x < 420 * sx) & (y >= 110 * sy) & (y < 250 * sy)
         return np.where(rect, 30.0, 8.0 + y.astype(np.float32) / h * 6.0).astype(np.float32)
 
     yy = np.repeat(np.arange(h, dtype=np.float32)[:, None], w, axis=1)
