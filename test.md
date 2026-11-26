@@ -960,3 +960,22 @@ Python ctypes 都能直接调）；放 `Bridge/` 就只有 iOS 能用。
 - 本地重新构建 `libstereo_core.a`，确认成员与符号：`sgm.obj` + `stereo_c_api.obj`，
   `stereo_create` / `stereo_match` 是未修饰的 C 符号
 - `golden_test`（含 C API 路径）与 `c_api_smoke` 全部通过
+
+---
+
+# 20. 文档重组：README → FAQ.md
+
+**决定**（用户）：`test` 分支的主题是「C++ + C/ObjC + Swift 三层重构」，不是原 App 的功能介绍。
+所以：
+
+- **删除 `README.md`**（原上游营销/算法介绍文档，main 分支里仍有，需要时 `git show main:README.md`）
+- **新建 `FAQ.md`**：开头是精简的项目结构说明（目录树 + 三层职责表），后面按 6 组 17 个问题
+  回答「这套代码怎么组织的、为什么」
+
+`FAQ.md` 的 Q1–Q6 里，**Q4/Q5/Q6 是用户自己追加到 README 末尾的笔记**（不透明句柄、
+`stereo::` 显式限定、`extern "C"` 与 `#ifdef __cplusplus`），已作为正式条目并入；
+其余问题来自这几轮的答疑（两套头文件、`stereo_c_api.cpp` 是否重写、Bridge 与桥接头、
+构建产物、IPA 体积、GPU 诊断、精度/性能、逐位一致的坑、开发约定）。
+
+顺带把 `tools/README.md` 与 `tools/sgm_ref.py` 里 5 处「复现 README 的精度表」改成
+「FAQ.md」，并把精度表搬进 `FAQ.md` Q14，避免悬空引用。

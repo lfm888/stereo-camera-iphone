@@ -17,7 +17,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#ifdef __cplusplus
+#ifdef __cplusplus      // 这一行是为objC准备的！
 extern "C" {
 #endif
 

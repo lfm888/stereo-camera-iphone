@@ -19,7 +19,7 @@ StereoVision/Shaders.metal 里的一个 kernel，行号写在 docstring 里，�
 
 跑法
 ----
-    uv run --with numpy --with pillow tools/sgm_ref.py                # 复现 README 的精度表
+    uv run --with numpy --with pillow tools/sgm_ref.py                # 复现 FAQ.md 的精度表
     uv run --with numpy --with pillow tools/sgm_ref.py --dump out/    # 顺便导出中间结果
     uv run --with numpy --with pillow tools/sgm_ref.py --split pair.png   # 跑截图里的 Rectified pair
 
@@ -353,7 +353,7 @@ def to_depth(disp: np.ndarray, fB: float, minZ: float, maxZ: float) -> np.ndarra
 def match_block(cl: np.ndarray, cr: np.ndarray, p: SGMParams) -> np.ndarray:
     """
     Census 5x5 窗口的汉明距离求和 + WTA + uniqueness + 亚像素。
-    README 里那张精度表的第一行就是它（62.2% / 6.5% / 31.2%）。
+    FAQ.md 里那张精度表的第一行就是它（62.2% / 6.5% / 31.2%）。
     """
     R = 2                      # 半窗宽：5x5
     h, w = cl.shape
@@ -701,7 +701,7 @@ def selftest(verbose=True):
 # 12. 完整管线 + benchmark
 # ============================================================================
 def pipeline(left, right, p: SGMParams, use_sgm: bool, lr: bool, dump_dir=None):
-    fB = 0.66          # px·m：f≈470 px × B≈1.4 mm（README 给的量级）
+    fB = 0.66          # px·m：f≈470 px × B≈1.4 mm（FAQ.md 给的量级）
     minZ, maxZ = 0.12, 3.0
 
     cl, cr = census(left), census(right)
@@ -787,7 +787,7 @@ def main():
               f"深度中位数 {np.median(depth[depth>0]) if (depth>0).any() else float('nan'):.2f} m")
         return
 
-    # ---- 复现 README 的精度表 ----
+    # ---- 复现 FAQ.md 的精度表 ----
     left, right, truth = synthetic_scene(args.seed)
     rows = [("Block 5x5  ", False, False), ("SGM-4      ", True, False), ("SGM-4 + LR ", True, True)]
     print(f"合成场景 (seed={args.seed})：斜面 d=8..14、矩形 d=30、y∈[200,330) 对比度 4%")
@@ -797,7 +797,7 @@ def main():
                            dump_dir=(args.dump if name.startswith("SGM-4 + LR") else None))
         g, b, iv = score(disp, truth, p.D)
         print(f"{name:<12} {g:13.1f}% {b:7.1f}% {iv:8.1f}%")
-    print("\nREADME 记录的参考值（纹理随机，数字会小幅浮动）：")
+    print("\nFAQ.md 记录的参考值（纹理随机，数字会小幅浮动）：")
     print("  Block 5x5    62.2%   6.5%  31.2%")
     print("  SGM-4        75.2%  13.9%  10.8%")
     print("  SGM-4 + LR   72.4%   9.3%  18.3%")

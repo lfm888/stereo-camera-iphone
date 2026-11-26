@@ -15,7 +15,7 @@
 # 自检：向量版 vs Metal 循环的逐字翻译，逐元素对比
 uv run --with numpy tools/sgm_ref.py --selftest
 
-# 复现 README 的精度表（约 3.5 s）
+# 复现 FAQ.md 的精度表（约 3.5 s）
 uv run --with numpy tools/sgm_ref.py
 
 # 导出全部中间结果
@@ -28,9 +28,9 @@ uv run --with numpy --with pillow tools/sgm_ref.py --split pair.png --D 96
 uv run --with numpy tools/sgm_ref.py --p1 4 --p2 128 --D 32
 ```
 
-与 README 的对照（同一合成场景，纹理随机所以会小幅浮动）：
+与 FAQ.md 的对照（同一合成场景，纹理随机所以会小幅浮动）：
 
-| 算法 | 本工具 | README |
+| 算法 | 本工具 | FAQ.md |
 |---|---|---|
 | Block 5×5 | 62.3 / 6.4 / 31.4 | 62.2 / 6.5 / 31.2 |
 | SGM-4 | 75.8 / 13.6 / 10.6 | 75.2 / 13.9 / 10.8 |
