@@ -21,7 +21,7 @@ targets:
         HEADER_SEARCH_PATHS: "$(SRCROOT)/core/include"
         CLANG_CXX_LANGUAGE_STANDARD: gnu++20
         CLANG_CXX_LIBRARY: libc++
-        # 异常保持开启：stereo_api.cpp 在 C 边界上 try/catch 掉 std::bad_alloc，
+        # 异常保持开启：stereo_c_api.cpp 在 C 边界上 try/catch 掉 std::bad_alloc，
         # 保证不会有 C++ 异常越过 stereo.h（Swift 无法展开它们）。
         # 关掉反而让 new 直接 abort。
 
@@ -48,7 +48,7 @@ targets:
         ENABLE_USER_SCRIPT_SANDBOXING: NO
         # 第二层：Swift 只看桥接头，桥接头里不出现 C++ 头
         SWIFT_OBJC_BRIDGING_HEADER: StereoVision/StereoVision-Bridging-Header.h
-        # Bridge/*.mm 要 include "stereo/stereo.h"
+        # Bridge/*.mm 要 include "stereo/stereo_c_api.h"
         HEADER_SEARCH_PATHS: "$(SRCROOT)/core/include"
         CLANG_CXX_LANGUAGE_STANDARD: gnu++20
         CLANG_CXX_LIBRARY: libc++

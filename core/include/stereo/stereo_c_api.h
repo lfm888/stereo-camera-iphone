@@ -1,5 +1,5 @@
 /*
- * stereo/stereo.h — 跨平台立体匹配库的**纯 C 接口**（三层架构的边界）
+ * stereo/stereo_c_api.h — 跨平台立体匹配库的**纯 C 接口**（三层架构的边界）
  *
  *   第一层  C++（core/src 下的 .cpp）     : census / costVolume / sgmPath / wta / depth
  *   第二层  C / Objective-C++（中间层）  : 生命周期、像素格式、与平台框架（CoreVideo/Metal）的接触面
@@ -11,8 +11,8 @@
  * 线程安全：stereo_context 不是线程安全的。一个 context 一次只在一个线程里用；
  * 多路并行就建多个 context（内部的临时缓冲区跟着 context 走）。
  */
-#ifndef STEREO_STEREO_H
-#define STEREO_STEREO_H
+#ifndef STEREO_C_API_H
+#define STEREO_C_API_H
 
 #include <stddef.h>
 #include <stdint.h>
@@ -121,4 +121,4 @@ int stereo_disparity_to_depth(stereo_context *ctx,
 } /* extern "C" */
 #endif
 
-#endif /* STEREO_STEREO_H */
+#endif /* STEREO_C_API_H */

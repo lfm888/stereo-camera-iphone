@@ -21,7 +21,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-/// 像素字节顺序，与 core/include/stereo/stereo.h 的 enum stereo_format 一一对应。
+/// 像素字节顺序，与 core/include/stereo/stereo_c_api.h 的 enum stereo_format 一一对应。
 typedef NS_ENUM(NSInteger, SVImageFormat) {
     SVImageFormatRGB8  NS_SWIFT_NAME(rgb8)  = 0,
     SVImageFormatBGR8  NS_SWIFT_NAME(bgr8)  = 1,

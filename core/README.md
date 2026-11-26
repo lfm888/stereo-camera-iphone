@@ -4,6 +4,47 @@
 
 零第三方依赖、零 Apple 依赖：只吃裸指针 + 宽高 + 行跨度。OpenCV 只在 CLI 和测试里用。
 
+## 文件都是干什么的（先读这个）
+
+`core/` 里是**三对**文件，每对解决一个语言边界问题。搞混它们是最常见的困惑来源。
+
+```
+        ┌──────────── libstereo_core.a（Apple clang / MSVC / gcc 编译）────────────┐
+        │                                                                          │
+        │   sgm.hpp  ──▶  sgm.cpp              算法本体（C++）                      │
+        │   ↑ 只有 C++ 能读                    零平台依赖、零缓冲区管理            │
+        │                                                                          │
+        │   stereo_c_api.h ──▶ stereo_c_api.cpp    C 门面（C++ 写的、导出 C 符号）  │
+        │   ↑ C 编译器也能读                    参数校验 + 缓冲区复用 + 结构体翻译    │
+        └──────────────────────────────────────────────────────────────────────────┘
+                 ▲                                        ▲
+        core/CMakeLists.txt 产出的 .a            StereoVision/Bridge/StereoCoreBridge.mm
+        （Windows exe / Linux / Python ctypes）    （iOS：把 stereo_* 包成 ObjC 类给 Swift）
+```
+
+| 文件 | 语言 | 是什么 | 不是什么 |
+|---|---|---|---|
+| `include/stereo/sgm.hpp` | C++ | 算法函数声明（内部用） | 不给 C/Swift 看 |
+| `src/sgm.cpp` | C++ | **算法本体**；连 `malloc` 都不做，缓冲区全靠调用方传入 | 不是对外接口 |
+| `include/stereo/stereo_c_api.h` | **C** | `.a` 的**公开符号表**：POD 结构体 + 不透明句柄 `stereo_context*` | 不是算法头 |
+| `src/stereo_c_api.cpp` | C++ | 上面那批 `stereo_*` 符号的**实现**：`new` 出 context、按尺寸复用缓冲区、`try/catch` 挡 `bad_alloc` | 不是算法；它一行信号处理都没有 |
+
+**为什么不能直接把 `sgm.hpp` 给 C 用**：
+
+| `sgm.hpp` 里的 | C 编译器 |
+|---|---|
+| `namespace stereo { … }` | 不认 |
+| `extern "C"` | 不认 |
+| `#include <cstdint>` | C 里叫 `<stdint.h>` |
+
+所以同一批函数必须有一份 C 版声明 —— 那就是 `stereo_c_api.h`。
+两份头描述的是**同一个 `.a`**：`sgm.cpp` 出 C++ 符号，`stereo_c_api.cpp` 出未修饰的
+C 符号（`stereo_create` / `stereo_match` / …），`nm` / `dumpbin` 能直接看到。
+
+**为什么 `stereo_c_api.*` 放在 `core/` 而不是 `Bridge/`**：它是 `.a` 的导出符号，属于
+**库的一部分**。放这儿，Windows exe / Linux / Python ctypes 都能直接调；放到 `Bridge/`
+就只有 iOS 能用了（而那层的存在理由正是「跨平台共用一份实现」）。
+
 ## 现状
 
 | 已实现 | 未实现 |

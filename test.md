@@ -922,3 +922,41 @@ git add StereoVision.xcodeproj && git commit -m "chore: xcodegen 生成两 targe
 | 2 | 按 §15.3(d) 优化 `census` / `wta`（钳位偏移表）→ `sgmPath` SIMD | 标量版在 x64 桌面是 211 ms/帧（640×360, D=64），iPhone 上只会更慢；升 GPU 才有意义之前得先降一个数量级 |
 | 3 | `match`（5×5 块匹配）与 `calibrate` 的 C++ 版 | 自动标定现在仍走 Metal，`(flip, dy)` 的搜索没搬到 CPU |
 | 4 | 把 `rectify` / `unrectifyDepth` 也搬 C++ | 那时 `.cpuCore` 才是真正「零 Metal」的后端，可以直接移植到 Windows/桌面 |
+
+---
+
+# 19. 命名调整：让 `core/` 里三对文件的职责自解释
+
+**动机**：`core/include/stereo/stereo.h` + `core/src/stereo_api.cpp` 这两个名字看不出来是
+「C 门面 / `.a` 的导出符号层」，很容易被当成算法代码（和"Bridage 拿 .a 再封装"的直觉对不上）。
+
+## 改了什么
+
+| 旧 | 新 |
+|---|---|
+| `core/include/stereo/stereo.h` | `core/include/stereo/stereo_c_api.h` |
+| `core/src/stereo_api.cpp` | `core/src/stereo_c_api.cpp` |
+| 头文件宏 `STEREO_STEREO_H` | `STEREO_C_API_H` |
+
+同步改了：所有 `#include "stereo/stereo.h"`（`stereo_c_api.cpp` / `c_api_smoke.c` /
+`golden_main.cpp` / `Bridge/StereoCoreBridge.mm`）、`core/CMakeLists.txt`、`project.yml` 的注释、
+`StereoVision.xcodeproj/project.pbxproj` 里的文件引用路径、`core/README.md`。
+
+**注意**：§15–§18 里提到的 `stereo.h` / `stereo_api.cpp` 都是这两个文件的旧名，内容没变。
+
+## `core/README.md` 开头新增了一张三对文件的对照图
+
+```
+sgm.hpp ──▶ sgm.cpp                算法本体（C++），零平台依赖、零缓冲区管理
+stereo_c_api.h ──▶ stereo_c_api.cpp    C 门面（C++ 写的、导出未修饰的 stereo_* 符号）
+```
+
+两份头描述**同一个 `.a`**：`sgm.cpp` 出 C++ 符号，`stereo_c_api.cpp` 出 C 符号。
+`stereo_c_api.*` 放在 `core/` 而不是 `Bridge/`，是因为它属于**库的一部分**（Windows / Linux /
+Python ctypes 都能直接调）；放 `Bridge/` 就只有 iOS 能用。
+
+## 验证
+
+- 本地重新构建 `libstereo_core.a`，确认成员与符号：`sgm.obj` + `stereo_c_api.obj`，
+  `stereo_create` / `stereo_match` 是未修饰的 C 符号
+- `golden_test`（含 C API 路径）与 `c_api_smoke` 全部通过

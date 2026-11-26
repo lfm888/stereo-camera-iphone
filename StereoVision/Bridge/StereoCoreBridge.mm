@@ -14,7 +14,7 @@
 
 #import "StereoCoreBridge.h"
 
-#include "stereo/stereo.h"
+#include "stereo/stereo_c_api.h"
 
 @implementation SVStereoCore {
     stereo_context *_ctx;  // C++ 侧的不透明句柄，唯一需要手工管理生命周期的东西

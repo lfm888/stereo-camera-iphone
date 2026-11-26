@@ -10,7 +10,7 @@
 //      与存档的 disp/depth 比（检验 rgb_to_luma 的实现是否与 numpy 一致）。
 
 #include "stereo/sgm.hpp"
-#include "stereo/stereo.h"
+#include "stereo/stereo_c_api.h"
 #include "npy.hpp"
 
 #include <algorithm>

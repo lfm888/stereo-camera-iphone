@@ -16,7 +16,7 @@ endif()
 
 add_library(stereo_core STATIC
     src/sgm.cpp
-    src/stereo_api.cpp
+    src/stereo_c_api.cpp
 )
 target_include_directories(stereo_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 

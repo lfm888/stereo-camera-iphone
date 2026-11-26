@@ -10,7 +10,7 @@
  *   - 尺寸检查、NULL 检查、错误字符串会正常返回
  */
 
-#include "stereo/stereo.h"
+#include "stereo/stereo_c_api.h"
 
 #include <stdio.h>
 #include <stdlib.h>

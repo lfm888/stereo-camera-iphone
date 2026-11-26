@@ -1,4 +1,4 @@
-// stereo_api.cpp — 纯 C 接口的实现（三层架构里的「第一层对外门面」）
+// stereo_c_api.cpp — 纯 C 接口的实现（三层架构里的「第一层对外门面」）
 //
 // 这一层**只做三件事**：参数校验、临时缓冲区管理、把 C 调用翻译成 C++ 算法调用。
 // 算法本身在 sgm.cpp 里，不含任何平台相关代码。
@@ -6,7 +6,7 @@
 // 缓冲区策略：跟着 context 走，尺寸不变就复用。所以第一帧之后每帧零分配——
 // 这是把「C++ 核心」接进实时管线时最要紧的一条。
 
-#include "stereo/stereo.h"
+#include "stereo/stereo_c_api.h"
 
 #include "stereo/sgm.hpp"
 
