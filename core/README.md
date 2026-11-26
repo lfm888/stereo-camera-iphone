@@ -26,6 +26,10 @@
 |---|---|---|---|
 | `include/stereo/sgm.hpp` | C++ | 算法函数声明（内部用） | 不给 C/Swift 看 |
 | `src/sgm.cpp` | C++ | **算法本体**；连 `malloc` 都不做，缓冲区全靠调用方传入 | 不是对外接口 |
+| `include/stereo/geometry.hpp` | C++ | 第 2 步的几何：3x3 小工具 + `rectify_geometry()`（MW/MU/MUp/K/Pl/Pr/Q） | 不做重采样 |
+| `src/geometry.cpp` | C++ | 由内参+外参解极线矫正（基线对齐旋转 + 单应） | 不碰像素 |
+| `include/stereo/rectify.hpp` | C++ | 第 2 步的重采样 + 第 4 步的深度回转（`rectify_image` / `unrectify_depth`） | 不是对外接口 |
+| `src/rectify.cpp` | C++ | `rectify` / `unrectifyDepth` 两个 Metal kernel 的 CPU 孪生 | — |
 | `include/stereo/stereo_c_api.h` | **C** | `.a` 的**公开符号表**：POD 结构体 + 不透明句柄 `stereo_context*` | 不是算法头 |
 | `src/stereo_c_api.cpp` | C++ | 上面那批 `stereo_*` 符号的**实现**：`new` 出 context、按尺寸复用缓冲区、`try/catch` 挡 `bad_alloc` | 不是算法；它一行信号处理都没有 |
 
@@ -49,10 +53,14 @@ C 符号（`stereo_create` / `stereo_match` / …），`nm` / `dumpbin` 能直�
 
 | 已实现 | 未实现 |
 |---|---|
-| `rgb_to_luma` / `census` / `cost_volume` / `sgm_path` / `sgm_all_paths` / `wta_right` / `wta_left` / `to_depth` | `match`（5×5 块匹配，自动标定要用）、`rectify` / `unrectifyDepth`、`geometry()`（单应）、`calibrate()`、C API |
+| `rgb_to_luma` / `census` / `cost_volume` / `sgm_path` / `sgm_all_paths` / `wta_right` / `wta_left` / `to_depth`（第 3、4 步）<br>`rectify_geometry`（第 2 步的几何）、`rectify_image` / `unrectify_depth`（第 2 步的重采样、第 4 步的回转） | `match`（5×5 块匹配）、`calibrate()`（自动标定搜索）、第 1 步的取参数（那一步在 Swift：`StereoVision/Calibration.swift`） |
 
 标量版本已与 numpy 孪生实现（`tools/sgm_ref.py`）**逐位一致**，覆盖 64×48/D=16、320×180/D=32、
 640×360/D=64 三个尺寸。
+
+极线矫正与深度回转没有外部金标准，用 `core/tests/geometry_test.cpp` 验**数学不变量**：
+极线同行、近视差 = fx·b/Z、MW/MU 与显式针孔模型逐点相等、Q 能还原 3D、
+反向外参 + flip 能复原几何等（`ctest -R geometry`）。
 
 ## 构建
 

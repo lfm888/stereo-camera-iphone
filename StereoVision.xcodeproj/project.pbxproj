@@ -11,6 +11,9 @@
 		C0DE0001000000000000B001 /* sgm.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0001000000000000F001 /* sgm.cpp */; };
 		C0DE0001000000000000B002 /* stereo_c_api.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0001000000000000F002 /* stereo_c_api.cpp */; };
 		C0DE0001000000000000B003 /* StereoCoreBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0001000000000000F006 /* StereoCoreBridge.mm */; };
+		C0DE0002000000000000B009 /* Calibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0002000000000000F009 /* Calibration.swift */; };
+		C0DE0002000000000000B00A /* geometry.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0002000000000000F00A /* geometry.cpp */; };
+		C0DE0002000000000000B00B /* rectify.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0002000000000000F00B /* rectify.cpp */; };
 		0A8885C208F8AF47A1DEF51B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DD47C900CDA69F349F2E7F05 /* Assets.xcassets */; };
 		25121C3183A3A939B562FD37 /* StereoEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBEB6373DDF5AFD89798702 /* StereoEngine.swift */; };
 		303596F04684BEEC1FD9B97E /* OverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DA425104A6DE48AF50AE289 /* OverlayView.swift */; };
@@ -32,6 +35,11 @@
 		C0DE0001000000000000F005 /* StereoCoreBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "StereoVision/Bridge/StereoCoreBridge.h"; sourceTree = "<group>"; };
 		C0DE0001000000000000F006 /* StereoCoreBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = "StereoVision/Bridge/StereoCoreBridge.mm"; sourceTree = "<group>"; };
 		C0DE0001000000000000F007 /* StereoVision-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "StereoVision/StereoVision-Bridging-Header.h"; sourceTree = "<group>"; };
+		C0DE0002000000000000F009 /* Calibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Calibration.swift; sourceTree = "<group>"; };
+		C0DE0002000000000000F00A /* geometry.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "core/src/geometry.cpp"; sourceTree = "<group>"; };
+		C0DE0002000000000000F00B /* rectify.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "core/src/rectify.cpp"; sourceTree = "<group>"; };
+		C0DE0002000000000000F00C /* geometry.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "core/include/stereo/geometry.hpp"; sourceTree = "<group>"; };
+		C0DE0002000000000000F00D /* rectify.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "core/include/stereo/rectify.hpp"; sourceTree = "<group>"; };
 		1921C3786C3FB672A67C7E9B /* Capture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Capture.swift; sourceTree = "<group>"; };
 		2DA425104A6DE48AF50AE289 /* OverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayView.swift; sourceTree = "<group>"; };
 		6E909856B28ECAC981F8F9C1 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
@@ -53,6 +61,7 @@
 				D3184CAD436EB2D31EDFD80E /* Analyzer.swift */,
 				E56DA7BD05E72209317257A2 /* AppModel.swift */,
 				DD47C900CDA69F349F2E7F05 /* Assets.xcassets */,
+				C0DE0002000000000000F009 /* Calibration.swift */,
 				F3911430056B77D868328295 /* CameraController.swift */,
 				1921C3786C3FB672A67C7E9B /* Capture.swift */,
 				AF78EAB8BCDBF65A25A5D815 /* ContentView.swift */,
@@ -79,8 +88,12 @@
 				AE69FD9BB0204AB135F044F8 /* Config */,
 				C0DE0001000000000000F001 /* sgm.cpp */,
 				C0DE0001000000000000F002 /* stereo_c_api.cpp */,
+				C0DE0002000000000000F00A /* geometry.cpp */,
+				C0DE0002000000000000F00B /* rectify.cpp */,
 				C0DE0001000000000000F003 /* sgm.hpp */,
 				C0DE0001000000000000F004 /* stereo_c_api.h */,
+				C0DE0002000000000000F00C /* geometry.hpp */,
+				C0DE0002000000000000F00D /* rectify.hpp */,
 				C0DE0001000000000000F005 /* StereoCoreBridge.h */,
 				C0DE0001000000000000F006 /* StereoCoreBridge.mm */,
 				C0DE0001000000000000F007 /* StereoVision-Bridging-Header.h */,
@@ -171,8 +184,11 @@
 			files = (
 			C0DE0001000000000000B001 /* sgm.cpp in Sources */,
 			C0DE0001000000000000B002 /* stereo_c_api.cpp in Sources */,
+			C0DE0002000000000000B00A /* geometry.cpp in Sources */,
+			C0DE0002000000000000B00B /* rectify.cpp in Sources */,
 			C0DE0001000000000000B003 /* StereoCoreBridge.mm in Sources */,
 				C00FAEBD9221E735877A6B2B /* Analyzer.swift in Sources */,
+				C0DE0002000000000000B009 /* Calibration.swift in Sources */,
 				4A938EB4B82503C00D57E3D0 /* AppModel.swift in Sources */,
 				CD63C1D3316EB9A56D11FB12 /* CameraController.swift in Sources */,
 				6D6FF7A50EAA907EE3B1FD83 /* Capture.swift in Sources */,

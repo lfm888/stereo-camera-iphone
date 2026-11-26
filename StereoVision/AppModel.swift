@@ -226,16 +226,15 @@ final class Pipeline: @unchecked Sendable {
                 StageDiag(id: 1, name: "显示 / 点云渲染", device: .gpu, ms: nil, note: "MTKView，每帧一次"),
             ])
         case .cpuStereo:
-            return ("C++ core（CPU 匹配）", [
+            return ("C++ core（CPU 匹配 + CPU 深度）", [
                 StageDiag(id: 0, name: "rectify（两路单应重采样）",
                           device: .gpu, ms: f.gpuRectifyMs, note: "Metal kernel"),
                 StageDiag(id: 1, name: "像素读回",
                           device: .cpu, ms: nil, note: "CVPixelBuffer 锁定 + MTLTexture.getBytes，约 2×0.9 MB/帧"),
-                StageDiag(id: 2, name: "census → costVolume → sgmPath×4 → wta",
-                          device: .cpu, ms: f.cpuMs, note: "C++ 核心 core/src/sgm.cpp"),
-                StageDiag(id: 3, name: "视差上传 + toDepth → unrectify",
-                          device: .gpu, ms: f.gpuDepthMs, note: "Metal kernel"),
-                StageDiag(id: 4, name: "显示 / 点云渲染", device: .gpu, ms: nil, note: "MTKView，每帧一次"),
+                StageDiag(id: 2, name: "census → costVolume → sgmPath×4 → wta → toDepth → unrectify",
+                          device: .cpu, ms: f.cpuMs,
+                          note: "全部在 C++：core/src/sgm.cpp + core/src/rectify.cpp；深度直接写进共享 MTLBuffer"),
+                StageDiag(id: 3, name: "显示 / 点云渲染", device: .gpu, ms: nil, note: "MTKView，每帧一次"),
             ])
         case .systemDepth:
             return ("系统深度（Apple / LiDAR）", [

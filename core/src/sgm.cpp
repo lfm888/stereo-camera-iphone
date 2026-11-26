@@ -229,6 +229,13 @@ void wta_left(const uint16_t* S, const float* dispR, const SgmParams& p, float* 
 }
 
 void to_depth(const float* disp, int w, int h, float fB, float minZ, float maxZ, float* depth) {
+    to_depth(disp, w, w, h, fB, minZ, maxZ, depth, w);
+}
+
+void to_depth(const float* disp, int disp_stride, int w, int h, float fB, float minZ, float maxZ,
+              float* depth, int depth_stride) {
+    if (disp_stride <= 0) disp_stride = w;
+    if (depth_stride <= 0) depth_stride = w;
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
             float v[9];
@@ -237,7 +244,7 @@ void to_depth(const float* disp, int w, int h, float fB, float minZ, float maxZ,
                 const int ys = clampi(y + dy, 0, h - 1);
                 for (int dx = -1; dx <= 1; ++dx) {
                     const int xs = clampi(x + dx, 0, w - 1);
-                    const float d = disp[static_cast<size_t>(ys) * w + xs];
+                    const float d = disp[static_cast<size_t>(ys) * static_cast<size_t>(disp_stride) + xs];
                     if (d > 0.0f) v[n++] = d;
                 }
             }
@@ -253,7 +260,7 @@ void to_depth(const float* disp, int w, int h, float fB, float minZ, float maxZ,
                 z = fB / v[n / 2];
                 if (z < minZ || z > maxZ) z = kInvalidDepth;
             }
-            depth[static_cast<size_t>(y) * w + x] = z;
+            depth[static_cast<size_t>(y) * static_cast<size_t>(depth_stride) + x] = z;
         }
     }
 }

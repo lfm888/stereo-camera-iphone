@@ -8,6 +8,8 @@
 
 #include "stereo/stereo_c_api.h"
 
+#include "stereo/geometry.hpp"
+#include "stereo/rectify.hpp"
 #include "stereo/sgm.hpp"
 
 #include <cstdio>
@@ -236,21 +238,109 @@ int stereo_disparity_to_depth(stereo_context *ctx,
     if (disp_stride <= 0) disp_stride = width;
     if (depth_stride <= 0) depth_stride = width;
 
-    // to_depth 要求紧凑布局；带跨度的输入/输出各搬一次（这两张图不到 1 MB）。
-    const size_t n = static_cast<size_t>(width) * static_cast<size_t>(height);
-    std::vector<float> in(n), out(n);
-    for (int y = 0; y < height; ++y) {
-        std::memcpy(in.data() + static_cast<size_t>(y) * width,
-                    disp + static_cast<size_t>(y) * disp_stride,
-                    static_cast<size_t>(width) * sizeof(float));
-    }
-    stereo::to_depth(in.data(), width, height, fB, min_z, max_z, out.data());
-    for (int y = 0; y < height; ++y) {
-        std::memcpy(depth + static_cast<size_t>(y) * depth_stride,
-                    out.data() + static_cast<size_t>(y) * width,
-                    static_cast<size_t>(width) * sizeof(float));
-    }
+    // to_depth 现在支持行跨度，所以不再需要搬进紧凑缓冲区。
+    stereo::to_depth(disp, disp_stride, width, height, fB, min_z, max_z, depth, depth_stride);
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* 第 2 步：极线矫正 + 第 4 步的深度回转                                  */
+/* ------------------------------------------------------------------ */
+
+namespace {
+
+stereo::Intrinsics to_intrinsics(const stereo_intrinsics &k) {
+    stereo::Intrinsics out;
+    out.fx = k.fx;
+    out.fy = k.fy;
+    out.cx = k.cx;
+    out.cy = k.cy;
+    return out;
+}
+
+stereo::Mat3 to_mat3(const float m[9]) {
+    stereo::Mat3 out;
+    for (int i = 0; i < 9; ++i) out.m[i] = m[i];
+    return out;
+}
+
+void from_mat3(const stereo::Mat3 &m, float out[9]) {
+    for (int i = 0; i < 9; ++i) out[i] = m.m[i];
+}
+
+bool valid_image(const stereo_image *img) {
+    return img != nullptr && img->data != nullptr && img->width > 0 && img->height > 0 &&
+           img->stride > 0;
+}
+
+}  // namespace
+
+int stereo_rectify_geometry(const stereo_rectify_input *in, stereo_rectify_output *out) {
+    if (in == nullptr || out == nullptr) return -1;
+
+    stereo::RectifyInput ri;
+    ri.wide = to_intrinsics(in->wide);
+    ri.ultra = to_intrinsics(in->ultra);
+    ri.extrinsic.R = to_mat3(in->R);
+    ri.extrinsic.t = stereo::Vec3{in->t[0], in->t[1], in->t[2]};
+    ri.src_width = in->src_width;
+    ri.work_width = in->work_width;
+    ri.work_height = in->work_height;
+    ri.flip = in->flip;
+    ri.dy = in->dy;
+
+    stereo::RectifyOutput g;
+    if (!stereo::rectify_geometry(ri, &g)) return -1;
+
+    from_mat3(g.to_wide_image, out->to_wide_image);
+    from_mat3(g.to_ultra_image, out->to_ultra_image);
+    from_mat3(g.to_rect_image, out->to_rect_image);
+    out->k.fx = g.K.fx;
+    out->k.fy = g.K.fy;
+    out->k.cx = g.K.cx;
+    out->k.cy = g.K.cy;
+    out->dir = g.dir;
+    out->focal_baseline = g.focal_baseline;
+    out->baseline_mm = g.baseline_mm;
+    out->baseline_deg = g.baseline_deg;
+    from_mat3(g.Rl, out->rl);
+    from_mat3(g.Rr, out->rr);
+    for (int i = 0; i < 12; ++i) {
+        out->p_left[i] = g.P_left[i];
+        out->p_right[i] = g.P_right[i];
+    }
+    for (int i = 0; i < 16; ++i) out->q[i] = g.Q[i];
+    return 0;
+}
+
+int stereo_rectify_image(const stereo_image *src, const float m[9], stereo_image *dst) {
+    if (!valid_image(src) || !valid_image(dst) || m == nullptr) return -1;
+
+    stereo::ImageView s;
+    s.data = src->data;
+    s.width = src->width;
+    s.height = src->height;
+    s.stride = src->stride;
+    s.format = src->format;
+
+    stereo::MutableImageView d;
+    d.data = const_cast<uint8_t *>(dst->data);
+    d.width = dst->width;
+    d.height = dst->height;
+    d.stride = dst->stride;
+    d.format = dst->format;
+
+    return stereo::rectify_image(s, to_mat3(m), d) ? 0 : -1;
+}
+
+int stereo_unrectify_depth(const float *src, int src_stride, int src_width, int src_height,
+                           const float m[9], float *dst, int dst_stride, int dst_width,
+                           int dst_height) {
+    if (src == nullptr || dst == nullptr || m == nullptr) return -1;
+    return stereo::unrectify_depth(src, src_width, src_height, src_stride, to_mat3(m), dst,
+                                   dst_width, dst_height, dst_stride)
+               ? 0
+               : -1;
 }
 
 } /* extern "C" */

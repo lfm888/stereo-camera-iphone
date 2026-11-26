@@ -18,6 +18,7 @@
 //
 
 #import <Foundation/Foundation.h>
+#import <simd/simd.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -81,6 +82,93 @@ typedef NS_ENUM(NSInteger, SVImageFormat) {
            height:(NSInteger)height
         direction:(NSInteger)direction
         disparity:(float *)disparity;
+
+// ---------------------------------------------------------------------------
+// 第 4 步：视差 → 深度，以及深度图回转
+// ---------------------------------------------------------------------------
+
+/// 视差 → 深度：3x3 中值（在视差域做）+ 范围截断，无效像素写 0。
+///
+/// fB 的单位是「像素·米」（= K.fx * baseline_m），所以输出 Z 是米。
+/// disp/depth 的行跨度以**像素**为单位；depth 可以直接指向
+/// `MTLBuffer` 背后的共享内存（按字节跨度换算），不需要额外拷贝。
+- (BOOL)depthFromDisparity:(const float *)disp
+                dispStride:(NSInteger)dispStride
+                     width:(NSInteger)width
+                    height:(NSInteger)height
+                        fB:(float)fB
+                      minZ:(float)minZ
+                      maxZ:(float)maxZ
+                     depth:(float *)depth
+               depthStride:(NSInteger)depthStride;
+
+/// 深度图回转：把**矫正后**坐标系的深度映回**宽相机**坐标系。
+///
+/// 与 Shaders.metal 的 unrectifyDepth 逐条一致（目标像素 +0.5 过单应、向下取整读源、
+/// 越界写 0）。无状态，所以是类方法。
++ (BOOL)unrectifyDepth:(const float *)src
+             srcStride:(NSInteger)srcStride
+                 width:(NSInteger)width
+                height:(NSInteger)height
+             transform:(simd_float3x3)transform
+                   dst:(float *)dst
+             dstStride:(NSInteger)dstStride
+               dstWidth:(NSInteger)dstWidth
+              dstHeight:(NSInteger)dstHeight;
+
+@end
+
+// ---------------------------------------------------------------------------
+// 第 2 步：极线矫正（几何）
+//
+// Swift 不直接调 stereo_rectify_geometry：那个结构体里有 float[9] / float[12] / float[16]，
+// Swift 会把它们导成巨大的元组，写起来全是 withUnsafePointer。这一层负责换乘 simd。
+// ---------------------------------------------------------------------------
+
+/// 极线矫正的输入：第 1 步（Calibration.swift）读到的内参 + 外参，原样搬进来。
+@interface SVRectifyInput : NSObject
+
+/// (fx, fy, cx, cy)，单位是**原始图像像素**。
+@property (nonatomic) simd_float4 wideIntrinsics;
+@property (nonatomic) simd_float4 ultraIntrinsics;
+
+/// 外参：`X_wide = rotation * X_ultra + translation`，translation 单位毫米。
+@property (nonatomic) simd_float3x3 rotation;
+@property (nonatomic) simd_float3 translation;
+
+/// 原始图宽（内参是按它给的，工作分辨率由 C++ 按比例缩放）。
+@property (nonatomic) float sourceWidth;
+@property (nonatomic) NSInteger workWidth;
+@property (nonatomic) NSInteger workHeight;
+/// 交换基线方向（外参取逆）。
+@property (nonatomic) BOOL flip;
+/// 矫正后的行偏移（工作分辨率像素，可亚像素），自动标定会给出非零值。
+@property (nonatomic) float yOffset;
+
+@end
+
+/// 极线矫正的结果。三种矩阵都是齐次像素坐标之间的单应（`p_dst ∝ M * p_src`）。
+@interface SVRectification : NSObject
+
+/// 解矫正。参数非法（内参/外参为零、尺寸非法）返回 nil。不做任何 GPU 工作。
++ (nullable SVRectification *)solve:(SVRectifyInput *)input;
+
+/// 矫正后左图像素 → 宽相机原始像素（MW，给 Metal 的 rectify kernel）。
+@property (nonatomic, readonly) simd_float3x3 rectifiedToWide;
+/// 矫正后左图像素 → 超广角原始像素（MU）。
+@property (nonatomic, readonly) simd_float3x3 rectifiedToUltra;
+/// 宽相机像素（**工作分辨率、K 坐标系**）→ 矫正后图像素（MUp，深度回转用）。
+@property (nonatomic, readonly) simd_float3x3 wideToRectified;
+
+/// 矫正后的共同内参 (fx, fy, cx, cy)。
+@property (nonatomic, readonly) simd_float4 intrinsics;
+/// +1 / -1：同名点在左图的哪一侧。
+@property (nonatomic, readonly) NSInteger direction;
+/// fx * baseline(米)：直接传给 toDepth 的 fB。
+@property (nonatomic, readonly) float focalBaseline;
+@property (nonatomic, readonly) float baselineMM;
+/// 基线相对宽相机 x 轴的角度（度）。对角双摄约 ±45°。
+@property (nonatomic, readonly) float baselineDegrees;
 
 @end
 

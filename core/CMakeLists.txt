@@ -16,6 +16,8 @@ endif()
 
 add_library(stereo_core STATIC
     src/sgm.cpp
+    src/geometry.cpp
+    src/rectify.cpp
     src/stereo_c_api.cpp
 )
 target_include_directories(stereo_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -35,7 +37,13 @@ endif()
 add_executable(golden_test tests/golden_main.cpp)
 target_link_libraries(golden_test PRIVATE stereo_core)
 
+# 极线矫正 / 重采样 / 深度回转：不依赖外部金标准，用数学不变量与往返一致性检查。
+# 这样在 Windows/Linux 上就能跑，不需要 Mac 或 Metal。
+add_executable(geometry_test tests/geometry_test.cpp)
+target_link_libraries(geometry_test PRIVATE stereo_core)
+
 # 让 `ctest` / `cmake --build . --target golden_test` 之后能直接跑对拍
 enable_testing()
 add_test(NAME golden COMMAND golden_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden)
 add_test(NAME c_api COMMAND c_api_smoke)
+add_test(NAME geometry COMMAND geometry_test)

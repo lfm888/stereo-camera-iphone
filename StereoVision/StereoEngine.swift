@@ -4,10 +4,6 @@ import Metal
 import QuartzCore
 import simd
 
-struct Intrinsics: Sendable {
-    var fx: Float, fy: Float, cx: Float, cy: Float
-}
-
 final class StereoFrame: @unchecked Sendable {
     let color: MTLTexture
     let pairLeft: MTLTexture?
@@ -19,9 +15,8 @@ final class StereoFrame: @unchecked Sendable {
     let gpuMs: Double
     /// C++ 后端（CPU）的匹配耗时；Metal 路径为 0。
     let cpuMs: Double
-    /// 分段计时（仅 C++ 路径有值）：矫正、深度回转各一段 GPU。
+    /// 分段计时（仅 C++ 路径有值）：矫正这一段 GPU。深度这一段现在也在 C++（计入 cpuMs）。
     let gpuRectifyMs: Double
-    let gpuDepthMs: Double
     let baselineMM: Float
     let baselineDeg: Float
     /// 已矫正的左图（rectify 的输出，32BGRA）。给 C++ 后端读回像素用。
@@ -32,7 +27,7 @@ final class StereoFrame: @unchecked Sendable {
     private let rowStride: Int
     private let retained: [AnyObject]
 
-    init(color: MTLTexture, pairLeft: MTLTexture? = nil, right: MTLTexture?, target: DepthTarget, K: Intrinsics, image: CVPixelBuffer, gpuMs: Double, baselineMM: Float, baselineDeg: Float = 0, pairLeftPB: CVPixelBuffer? = nil, dir: Int32 = 1, cpuMs: Double = 0, gpuRectifyMs: Double = 0, gpuDepthMs: Double = 0, retained: [AnyObject]) {
+    init(color: MTLTexture, pairLeft: MTLTexture? = nil, right: MTLTexture?, target: DepthTarget, K: Intrinsics, image: CVPixelBuffer, gpuMs: Double, baselineMM: Float, baselineDeg: Float = 0, pairLeftPB: CVPixelBuffer? = nil, dir: Int32 = 1, cpuMs: Double = 0, gpuRectifyMs: Double = 0, retained: [AnyObject]) {
         self.color = color
         self.pairLeft = pairLeft
         self.right = right
@@ -46,7 +41,6 @@ final class StereoFrame: @unchecked Sendable {
         self.gpuMs = gpuMs
         self.cpuMs = cpuMs
         self.gpuRectifyMs = gpuRectifyMs
-        self.gpuDepthMs = gpuDepthMs
         self.baselineMM = baselineMM
         self.baselineDeg = baselineDeg
         self.pairLeftPB = pairLeftPB
@@ -122,10 +116,10 @@ final class StereoEngine: @unchecked Sendable {
     private var appleTargets: [DepthTarget] = []
     private var slotIndex = 0
 
-    private var R = matrix_identity_float3x3
-    private var t = SIMD3<Float>(12, 0, 0)
-    private var wideFOV: Float = 70, ultraFOV: Float = 108
-    private(set) var hasExtrinsics = false
+    /// 第 1 步（Calibration.swift）读到的双摄参数。只要 session 建起来就有值，
+    /// `hasExtrinsics == false` 表示系统没给外参、用的是回退值。
+    private var rig: CameraRig?
+    var hasExtrinsics: Bool { rig?.hasExtrinsics ?? false }
 
     /// C++ 后端（第三层 → 第二层 → C 接口 → core/src/sgm.cpp）。
     /// 只在相机数据队列上访问，所以不需要加锁。
@@ -133,8 +127,7 @@ final class StereoEngine: @unchecked Sendable {
 
     private final class Slot {
         let right, censusL, censusR, disp, cost, depthRolled: MTLTexture
-        /// CPU 后端的视差上传目标（.shared，可直接 replace(region:)）。
-        let dispCPU: MTLTexture
+        /// 深度图目标（背后是共享 MTLBuffer，C++ 的 unrectify_depth 直接写进去）。
         let target: DepthTarget
 
         init(device: MTLDevice, w: Int, h: Int) {
@@ -150,7 +143,6 @@ final class StereoEngine: @unchecked Sendable {
             disp = tex(.r32Float)
             depthRolled = tex(.r32Float)
             cost = tex(.r32Float, shared: true)
-            dispCPU = tex(.r32Float, shared: true)
             target = DepthTarget(device: device, width: w, height: h)
         }
     }
@@ -199,14 +191,7 @@ final class StereoEngine: @unchecked Sendable {
     }
 
     func configure(wide: AVCaptureDevice, ultra: AVCaptureDevice) {
-        wideFOV = wide.activeFormat.videoFieldOfView
-        ultraFOV = ultra.activeFormat.videoFieldOfView
-        guard let data = AVCaptureDevice.extrinsicMatrix(from: ultra, to: wide) else { hasExtrinsics = false; return }
-        let m = data.withUnsafeBytes { $0.loadUnaligned(as: simd_float4x3.self) }
-        R = simd_float3x3(columns: (m.columns.0, m.columns.1, m.columns.2))
-        t = m.columns.3
-        hasExtrinsics = simd_length(t) > 1
-        if !hasExtrinsics { R = matrix_identity_float3x3; t = SIMD3(12, 0, 0) }
+        rig = CalibrationSource.rig(wide: wide, ultra: ultra)
     }
 
     private func texture(_ pb: CVPixelBuffer, writable: Bool = false) -> (MTLTexture, CVMetalTexture)? {
@@ -217,34 +202,33 @@ final class StereoEngine: @unchecked Sendable {
         return (tex, cv)
     }
 
-    private func intrinsics(_ sb: CMSampleBuffer, fov: Float, size: SIMD2<Float>) -> simd_float3x3 {
-        if let data = CMGetAttachment(sb, key: kCMSampleBufferAttachmentKey_CameraIntrinsicMatrix, attachmentModeOut: nil) as? Data {
-            return data.withUnsafeBytes { $0.loadUnaligned(as: simd_float3x3.self) }
-        }
-        let f = size.x / (2 * tan(fov * .pi / 360))
-        return simd_float3x3(columns: (SIMD3(f, 0, 0), SIMD3(0, f, 0), SIMD3(size.x / 2, size.y / 2, 1)))
+    /// 读一帧的内参。第 1 步的实际入口是 Calibration.swift，这里只是补上角色与视场角。
+    private func intrinsics(_ sb: CMSampleBuffer, role: CameraRole, fov: Float, size: SIMD2<Float>) -> Intrinsics {
+        CalibrationSource.intrinsics(of: sb, role: role, fov: fov, size: size).intrinsics
     }
 
-    func geometry(KW: simd_float3x3, KU: simd_float3x3, srcW: Float, flip: Bool, dy: Float) -> Geometry {
-        var R = self.R, t = self.t
-        if flip { R = R.transpose; t = -(R * t) }
-        let dir: Float = t.x >= 0 ? 1 : -1
-        let e1 = simd_normalize(t) * dir
-        let e2 = simd_normalize(SIMD3(-e1.y, e1.x, 0))
-        let e3 = simd_cross(e1, e2)
-        let Rr = simd_float3x3(rows: [e1, e2, e3])
-        let s = Float(Self.workW) / srcW
-        let K = Intrinsics(fx: KW[0][0] * s, fy: KW[1][1] * s, cx: KW[2][0] * s, cy: KW[2][1] * s)
-        let Kr = simd_float3x3(columns: (SIMD3(K.fx, 0, 0), SIMD3(0, K.fy, 0), SIMD3(K.cx, K.cy, 1)))
-        let T = simd_float3x3(columns: (SIMD3(1, 0, 0), SIMD3(0, 1, 0), SIMD3(0, dy, 1)))
-        let back = Rr.transpose * Kr.inverse
-        let baseline = simd_length(t)
-        // The rectified frame is rolled by the baseline direction, so it is tilted on phones whose two
-        // lenses sit on a diagonal (iPhone 13-15). MUp brings pixels back to the wide camera's own
-        // frame: the rectified ray of MUp*p is the same ray as p, and Z is the same along both axes.
-        let MUp = Kr * Rr * Kr.inverse
-        let baselineDeg = Float(atan2(Double(t.y), Double(t.x)) * 180 / .pi)
-        return Geometry(MW: KW * back, MU: KU * R.transpose * back * T, MUp: MUp, K: K, dir: Int32(dir), fB: K.fx * baseline / 1000, baselineMM: baseline, baselineDeg: baselineDeg)
+    /// 第 2 步：极线矫正的几何。
+    ///
+    /// 数学全部在 C++（core/src/geometry.cpp），这里只负责把第 1 步读到的内参/外参
+    /// 装箱交给 SVRectification，再把结果换回本文件用的 simd 类型。
+    /// 返回 nil 表示参数不可用（外参为零、尺寸非法），调用方应该丢掉这一帧。
+    func geometry(KW: Intrinsics, KU: Intrinsics, srcW: Float, flip: Bool, dy: Float) -> Geometry? {
+        guard let rig else { return nil }
+        let input = SVRectifyInput()
+        input.wideIntrinsics = SIMD4(KW.fx, KW.fy, KW.cx, KW.cy)
+        input.ultraIntrinsics = SIMD4(KU.fx, KU.fy, KU.cx, KU.cy)
+        input.rotation = rig.extrinsics.rotation
+        input.translation = rig.extrinsics.translation
+        input.sourceWidth = srcW
+        input.workWidth = Self.workW
+        input.workHeight = Self.workH
+        input.flip = flip
+        input.yOffset = dy
+        guard let r = SVRectification.solve(input) else { return nil }
+        let k = r.intrinsics
+        return Geometry(MW: r.rectifiedToWide, MU: r.rectifiedToUltra, MUp: r.wideToRectified,
+                        K: Intrinsics(fx: k.x, fy: k.y, cx: k.z, cy: k.w), dir: Int32(r.direction),
+                        fB: r.focalBaseline, baselineMM: r.baselineMM, baselineDeg: r.baselineDegrees)
     }
 
     private func dispatch(_ enc: MTLComputeCommandEncoder, _ pso: MTLComputePipelineState, _ textures: [MTLTexture], buffers: [MTLBuffer] = [], bytes: UnsafeRawPointer? = nil, length: Int = 0) {
@@ -292,7 +276,7 @@ final class StereoEngine: @unchecked Sendable {
     private struct Inputs {
         let wTex: MTLTexture, uTex: MTLTexture
         let wpb: CVPixelBuffer, upb: CVPixelBuffer
-        let KW: simd_float3x3, KU: simd_float3x3
+        let KW: Intrinsics, KU: Intrinsics
         let keep: [AnyObject]
     }
 
@@ -300,7 +284,10 @@ final class StereoEngine: @unchecked Sendable {
         guard let wpb = CMSampleBufferGetImageBuffer(wide), let upb = CMSampleBufferGetImageBuffer(ultra),
               let (wTex, wcv) = texture(wpb), let (uTex, ucv) = texture(upb) else { return nil }
         let ws = SIMD2(Float(wTex.width), Float(wTex.height)), us = SIMD2(Float(uTex.width), Float(uTex.height))
-        return Inputs(wTex: wTex, uTex: uTex, wpb: wpb, upb: upb, KW: intrinsics(wide, fov: wideFOV, size: ws), KU: intrinsics(ultra, fov: ultraFOV, size: us), keep: [wcv, ucv])
+        return Inputs(wTex: wTex, uTex: uTex, wpb: wpb, upb: upb,
+                      KW: intrinsics(wide, role: .wide, fov: rig?.wide.fovDeg ?? 70, size: ws),
+                      KU: intrinsics(ultra, role: .ultraWide, fov: rig?.ultra.fovDeg ?? 108, size: us),
+                      keep: [wcv, ucv])
     }
 
     func stereo(_ wide: CMSampleBuffer, _ ultra: CMSampleBuffer, _ s: PipelineSettings) -> StereoFrame? {
@@ -311,7 +298,7 @@ final class StereoEngine: @unchecked Sendable {
               let enc = cb.makeComputeCommandEncoder() else { return nil }
         slotIndex = (slotIndex + 1) % slots.count
         let slot = slots[slotIndex]
-        let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), flip: s.flip, dy: s.yOffset)
+        guard let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), flip: s.flip, dy: s.yOffset) else { return nil }
         encodeRectify(enc, inp.wTex, lTex, g.MW)
         encodeRectify(enc, inp.uTex, slot.right, g.MU)
         dispatch(enc, censusPSO, [lTex, slot.censusL])
@@ -351,7 +338,7 @@ final class StereoEngine: @unchecked Sendable {
 
         slotIndex = (slotIndex + 1) % slots.count
         let slot = slots[slotIndex]
-        let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), flip: s.flip, dy: s.yOffset)
+        guard let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), flip: s.flip, dy: s.yOffset) else { return nil }
         let w = Self.workW, h = Self.workH
 
         // ---- 1) 矫正：GPU ----
@@ -390,24 +377,29 @@ final class StereoEngine: @unchecked Sendable {
         let cpuMs = (CACurrentMediaTime() - t0) * 1000
         guard ok else { return nil }
 
-        // ---- 3) 视差上传 + toDepth + unrectify：GPU ----
-        slot.dispCPU.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
-                            withBytes: disp, bytesPerRow: w * 4)
-        guard let cb2 = queue.makeCommandBuffer(), let enc2 = cb2.makeComputeCommandEncoder() else { return nil }
-        var d = DepthParams(fB: g.fB, minZ: s.minZ, maxZ: s.maxZ, pad: 0)
-        dispatch(enc2, depthPSO, [slot.dispCPU, slot.depthRolled], bytes: &d, length: MemoryLayout<DepthParams>.stride)
-        var u = RectParams(M: g.MUp, srcSize: .zero)
-        dispatch(enc2, unrectPSO, [slot.depthRolled, slot.target.texture], bytes: &u, length: MemoryLayout<RectParams>.stride)
-        enc2.endEncoding()
-        cb2.commit()
-        cb2.waitUntilCompleted()
-        let depthMs = (cb2.gpuEndTime - cb2.gpuStartTime) * 1000
+        // ---- 3) 视差 → 深度 → 回转：全部在 C++（第 4 步）----
+        //
+        // 以前这一段要再起一个 command buffer（上传视差 + toDepth + unrectify 两个 kernel），
+        // 现在整段都是 CPU：stereo::to_depth 写进一块临时缓冲，stereo::unrectify_depth
+        // 直接写进 target 背后的**共享 MTLBuffer**，一次上传/回读都不需要。
+        let depthT0 = CACurrentMediaTime()
+        let depthRaw = UnsafeMutablePointer<Float>.allocate(capacity: w * h)
+        defer { depthRaw.deallocate() }
+        guard core.depthFromDisparity(disp, dispStride: w, width: w, height: h, fB: g.fB,
+                                     minZ: s.minZ, maxZ: s.maxZ,
+                                     depth: depthRaw, depthStride: w) else { return nil }
+        guard SVStereoCore.unrectifyDepth(depthRaw, srcStride: w, width: w, height: h,
+                                          transform: g.MUp,
+                                          dst: slot.target.buffer.contents().assumingMemoryBound(to: Float.self),
+                                          dstStride: slot.target.bytesPerRow / 4,
+                                          dstWidth: w, dstHeight: h) else { return nil }
+        let depthMs = (CACurrentMediaTime() - depthT0) * 1000
 
         let retained: [AnyObject] = inp.keep + [lcv, wide]
         return StereoFrame(color: inp.wTex, pairLeft: lTex, right: slot.right, target: slot.target, K: g.K, image: inp.wpb,
-                           gpuMs: rectifyMs + depthMs, baselineMM: g.baselineMM, baselineDeg: g.baselineDeg,
-                           pairLeftPB: lpb, dir: g.dir, cpuMs: cpuMs,
-                           gpuRectifyMs: rectifyMs, gpuDepthMs: depthMs, retained: retained)
+                           gpuMs: rectifyMs, baselineMM: g.baselineMM, baselineDeg: g.baselineDeg,
+                           pairLeftPB: lpb, dir: g.dir, cpuMs: cpuMs + depthMs,
+                           gpuRectifyMs: rectifyMs, retained: retained)
     }
 
     func calibrate(_ wide: CMSampleBuffer, _ ultra: CMSampleBuffer, _ s: PipelineSettings) -> (flip: Bool, dy: Float) {
@@ -417,8 +409,8 @@ final class StereoEngine: @unchecked Sendable {
         var costs = [Float](repeating: 0, count: n)
 
         func score(flip: Bool, dy: Float) -> Float {
-            let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), flip: flip, dy: dy)
-            guard let cb = queue.makeCommandBuffer(), let enc = cb.makeComputeCommandEncoder() else { return .infinity }
+            guard let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), flip: flip, dy: dy),
+                  let cb = queue.makeCommandBuffer(), let enc = cb.makeComputeCommandEncoder() else { return .infinity }
             encodeRectify(enc, inp.wTex, slot.right, g.MW)
             dispatch(enc, censusPSO, [slot.right, slot.censusL])
             encodeRectify(enc, inp.uTex, slot.right, g.MU)
@@ -473,17 +465,7 @@ final class StereoEngine: @unchecked Sendable {
         }
         CVPixelBufferUnlockBaseAddress(map, .readOnly)
 
-        var K: Intrinsics
-        if let cal = data.cameraCalibrationData {
-            let m = cal.intrinsicMatrix
-            let ref = cal.intrinsicMatrixReferenceDimensions
-            let sc = Float(w) / Float(ref.width)
-            let off = (Float(ref.height) * sc - Float(h)) / 2
-            K = Intrinsics(fx: m[0][0] * sc, fy: m[1][1] * sc, cx: m[2][0] * sc, cy: m[2][1] * sc - off)
-        } else {
-            let f = Float(w) / (2 * tan(wideFOV * .pi / 360))
-            K = Intrinsics(fx: f, fy: f, cx: Float(w) / 2, cy: Float(h) / 2)
-        }
+        let K = CalibrationSource.depthIntrinsics(data, width: w, height: h, fovDeg: rig?.wide.fovDeg ?? 70)
         return StereoFrame(color: tex, right: nil, target: target, K: K, image: pb, gpuMs: 0, baselineMM: 0, retained: [cv])
     }
 }

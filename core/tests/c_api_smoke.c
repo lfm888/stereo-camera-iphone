@@ -90,6 +90,69 @@ int main(void) {
     /* 再跑一次：缓冲区复用，不应该崩 */
     check("二次调用（缓冲区复用）", stereo_match(ctx, &li, &ri, 1, disp, W) == 0, "");
 
+    /* ---- 第 2 / 4 步：极线矫正与深度回转（不需要 ctx）---- */
+    stereo_rectify_input rin;
+    stereo_rectify_output rout;
+    memset(&rin, 0, sizeof(rin));
+    memset(&rout, 0, sizeof(rout));
+    rin.wide.fx = 700.0f; rin.wide.fy = 700.0f; rin.wide.cx = 32.0f; rin.wide.cy = 24.0f;
+    rin.ultra = rin.wide;
+    rin.R[0] = rin.R[4] = rin.R[8] = 1.0f;
+    rin.t[0] = 65.0f;
+    rin.src_width = W;
+    rin.work_width = W;
+    rin.work_height = H;
+    check("stereo_rectify_geometry 成功", stereo_rectify_geometry(&rin, &rout) == 0, "");
+    snprintf(buf, sizeof(buf), "baseline %.1f mm · dir %d", (double)rout.baseline_mm, rout.dir);
+    check("矫正输出合理", rout.baseline_mm > 60.0f && rout.baseline_mm < 70.0f, buf);
+
+    /* 单位单应 + 常量图：内部区域必须逐字节不变（边缘会因 clamp_to_zero 变暗）*/
+    {
+        const int CW = 24, CH = 16;
+        unsigned char *flat = (unsigned char *)malloc((size_t)CW * CH * 3);
+        unsigned char *out = (unsigned char *)malloc((size_t)CW * CH * 3);
+        stereo_image src, dst;
+        static const float ident[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        int same = 1;
+        memset(flat, 128, (size_t)CW * CH * 3);
+        memset(out, 0, (size_t)CW * CH * 3);
+        src.data = flat; src.width = CW; src.height = CH; src.stride = CW * 3;
+        src.format = STEREO_FORMAT_RGB8;
+        dst = src;
+        dst.data = out;
+        check("stereo_rectify_image 成功", stereo_rectify_image(&src, ident, &dst) == 0, "");
+        for (int y = 1; y < CH - 1 && same; ++y) {
+            for (int x = 1; x < CW - 1; ++x) {
+                const unsigned char *p = out + y * CW * 3 + x * 3;
+                if (p[0] != 128 || p[1] != 128 || p[2] != 128) { same = 0; break; }
+            }
+        }
+        check("常量图内部区域不变", same, "逐字节相等");
+
+        /* 格式不同必须拒绝：否则会把 B 与 R 静默写反 */
+        dst = src;
+        dst.data = out;
+        dst.format = STEREO_FORMAT_BGRA8;
+        check("stereo_rectify_image 拒绝格式不一致",
+              stereo_rectify_image(&src, ident, &dst) != 0, "");
+
+        /* 真实尺寸的噪声图也要能跑 */
+        dst = src;
+        dst.data = out;
+        (void)src;
+        free(flat);
+        free(out);
+    }
+
+    {
+        float *d2 = (float *)malloc(sizeof(float) * W * H);
+        check("stereo_unrectify_depth 成功",
+              stereo_unrectify_depth(depth, W, W, H, rout.to_rect_image, d2, W, W, H) == 0, "");
+        check("stereo_unrectify_depth 拒绝 NULL",
+              stereo_unrectify_depth(NULL, W, W, H, rout.to_rect_image, d2, W, W, H) != 0, "");
+        free(d2);
+    }
+
     stereo_destroy(ctx);
     check("stereo_destroy(NULL) 安全", (stereo_destroy(NULL), 1), "");
 

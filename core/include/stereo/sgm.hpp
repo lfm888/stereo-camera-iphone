@@ -100,6 +100,13 @@ void wta_left(const uint16_t* S, const float* dispR, const SgmParams& p, float* 
 /// 少于 5 个有效邻居整块判无效；越出 [minZ, maxZ] 亦为无效。
 void to_depth(const float* disp, int w, int h, float fB, float minZ, float maxZ, float* depth);
 
+/// 同上，但输入/输出带行跨度（单位**像素**，<= 0 表示等于 width）。
+///
+/// C API 与 iOS 的 CPU 路径都用这个：视差是紧凑数组、深度图直接写进
+/// MTLBuffer 背后的共享内存（行跨度按像素对齐过），一次拷贝都不需要。
+void to_depth(const float* disp, int disp_stride, int w, int h, float fB, float minZ, float maxZ,
+              float* depth, int depth_stride);
+
 // ---------------------------------------------------------------------------
 // 小工具
 // ---------------------------------------------------------------------------
