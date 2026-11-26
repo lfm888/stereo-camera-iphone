@@ -132,6 +132,35 @@ bool usable(const stereo_image *img) {
            bytes_per_pixel(img->format) > 0 && img->stride >= img->width * bytes_per_pixel(img->format);
 }
 
+// 第 2 / 4 步的 POD → C++ 类型翻译。
+//
+// 这些**必须**放在 `extern "C" {` **外面**：它们返回 stereo::Intrinsics / stereo::Mat3
+// 这类 C++ 类型，带 C 链接的声明 clang 会直接报
+// `-Wreturn-type-c-linkage`（开了 -Werror 就是编译失败）。
+stereo::Intrinsics to_intrinsics(const stereo_intrinsics &k) {
+    stereo::Intrinsics out;
+    out.fx = k.fx;
+    out.fy = k.fy;
+    out.cx = k.cx;
+    out.cy = k.cy;
+    return out;
+}
+
+stereo::Mat3 to_mat3(const float m[9]) {
+    stereo::Mat3 out;
+    for (int i = 0; i < 9; ++i) out.m[i] = m[i];
+    return out;
+}
+
+void from_mat3(const stereo::Mat3 &m, float out[9]) {
+    for (int i = 0; i < 9; ++i) out[i] = m.m[i];
+}
+
+bool valid_image(const stereo_image *img) {
+    return img != nullptr && img->data != nullptr && img->width > 0 && img->height > 0 &&
+           img->stride > 0;
+}
+
 }  // namespace
 
 extern "C" {
@@ -246,34 +275,6 @@ int stereo_disparity_to_depth(stereo_context *ctx,
 /* ------------------------------------------------------------------ */
 /* 第 2 步：极线矫正 + 第 4 步的深度回转                                  */
 /* ------------------------------------------------------------------ */
-
-namespace {
-
-stereo::Intrinsics to_intrinsics(const stereo_intrinsics &k) {
-    stereo::Intrinsics out;
-    out.fx = k.fx;
-    out.fy = k.fy;
-    out.cx = k.cx;
-    out.cy = k.cy;
-    return out;
-}
-
-stereo::Mat3 to_mat3(const float m[9]) {
-    stereo::Mat3 out;
-    for (int i = 0; i < 9; ++i) out.m[i] = m[i];
-    return out;
-}
-
-void from_mat3(const stereo::Mat3 &m, float out[9]) {
-    for (int i = 0; i < 9; ++i) out[i] = m.m[i];
-}
-
-bool valid_image(const stereo_image *img) {
-    return img != nullptr && img->data != nullptr && img->width > 0 && img->height > 0 &&
-           img->stride > 0;
-}
-
-}  // namespace
 
 int stereo_rectify_geometry(const stereo_rectify_input *in, stereo_rectify_output *out) {
     if (in == nullptr || out == nullptr) return -1;
