@@ -385,9 +385,11 @@ final class StereoEngine: @unchecked Sendable {
         let depthT0 = CACurrentMediaTime()
         let depthRaw = UnsafeMutablePointer<Float>.allocate(capacity: w * h)
         defer { depthRaw.deallocate() }
-        guard core.depthFromDisparity(disp, dispStride: w, width: w, height: h, fB: g.fB,
-                                     minZ: s.minZ, maxZ: s.maxZ,
-                                     depth: depthRaw, depthStride: w) else { return nil }
+        // ObjC 导入器会把 `depthFromDisparity:` 按 SE-0005 改写成 `depth(fromDisparity:)`，
+        // 这里必须用改写后的名字，否则 Swift 5 语言模式下是 error。
+        guard core.depth(fromDisparity: disp, dispStride: w, width: w, height: h, fB: g.fB,
+                         minZ: s.minZ, maxZ: s.maxZ,
+                         depth: depthRaw, depthStride: w) else { return nil }
         guard SVStereoCore.unrectifyDepth(depthRaw, srcStride: w, width: w, height: h,
                                           transform: g.MUp,
                                           dst: slot.target.buffer.contents().assumingMemoryBound(to: Float.self),

@@ -57,3 +57,39 @@ jobs:
           fi
           echo "== $BIN =="
           "$BIN" core/tests/golden
+
+      - name: Geometry test (极线矫正 / 重采样 / 深度回转)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN=""
+          for c in build/core/geometry_test \
+                   build/core/Release/geometry_test.exe \
+                   build/core/Debug/geometry_test.exe; do
+            if [ -f "$c" ]; then BIN="$c"; break; fi
+          done
+          if [ -z "$BIN" ]; then
+            echo "找不到 geometry_test，产物目录："
+            find build/core -maxdepth 3 -type f -name "*geometry*" | head -20
+            exit 1
+          fi
+          echo "== $BIN =="
+          "$BIN"
+
+      - name: C API smoke test (纯 C 编译器)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN=""
+          for c in build/core/c_api_smoke \
+                   build/core/Release/c_api_smoke.exe \
+                   build/core/Debug/c_api_smoke.exe; do
+            if [ -f "$c" ]; then BIN="$c"; break; fi
+          done
+          if [ -z "$BIN" ]; then
+            echo "找不到 c_api_smoke"
+            find build/core -maxdepth 3 -type f -name "*c_api*" | head -20
+            exit 1
+          fi
+          echo "== $BIN =="
+          "$BIN"
