@@ -26,10 +26,15 @@ void copy_to_row_major(simd_float3x3 m, float out[9]) {
     }
 }
 
+/// 行主序 float[9] → simd。
+///
+/// 必须用 simd_make_float3 + simd_matrix：simd_float3 是 `ext_vector_type`（不是结构体），
+/// `simd_float3(a, b, c)` 这种 C++ 构造器写法在 ObjC++ 里会被当成标量初始化器而报
+/// “excess elements in scalar initializer”。
 simd_float3x3 mat3_from_row_major(const float in[9]) {
-    return simd_float3x3(simd_float3(in[0], in[3], in[6]),
-                         simd_float3(in[1], in[4], in[7]),
-                         simd_float3(in[2], in[5], in[8]));
+    return simd_matrix(simd_make_float3(in[0], in[3], in[6]),
+                       simd_make_float3(in[1], in[4], in[7]),
+                       simd_make_float3(in[2], in[5], in[8]));
 }
 
 stereo_intrinsics intrinsics_from(simd_float4 v) {
