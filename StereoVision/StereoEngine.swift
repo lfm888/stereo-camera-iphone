@@ -13,9 +13,18 @@ final class StereoFrame: @unchecked Sendable {
     let K: Intrinsics
     let image: CVPixelBuffer
     let gpuMs: Double
-    /// C++ 后端（CPU）的匹配耗时；Metal 路径为 0。
-    let cpuMs: Double
-    /// 分段计时（仅 C++ 路径有值）：矫正这一段 GPU。深度这一段现在也在 C++（计入 cpuMs）。
+    /// 分段计时（仅 C++ 路径有值，Metal 路径全为 0）。
+    ///
+    /// 三个字段加起来就是 `cpuMs`，诊断页每一行都有真实数字，不留横杠：
+    ///   readbackMs  像素读回（CVPixelBuffer 锁定 + MTLTexture.getBytes）
+    ///   matchMs     census → costVolume → sgmPath×4 → wta（C++ 匹配）
+    ///   depthMs     toDepth → unrectify（C++ 深度）
+    let readbackMs: Double
+    let matchMs: Double
+    let depthMs: Double
+    /// CPU 一段的总和。用算的，避免两个地方各自累加而走样。
+    var cpuMs: Double { readbackMs + matchMs + depthMs }
+    /// 矫正这一段（两路单应的 GPU 重采样）。
     let gpuRectifyMs: Double
     let baselineMM: Float
     let baselineDeg: Float
@@ -27,7 +36,7 @@ final class StereoFrame: @unchecked Sendable {
     private let rowStride: Int
     private let retained: [AnyObject]
 
-    init(color: MTLTexture, pairLeft: MTLTexture? = nil, right: MTLTexture?, target: DepthTarget, K: Intrinsics, image: CVPixelBuffer, gpuMs: Double, baselineMM: Float, baselineDeg: Float = 0, pairLeftPB: CVPixelBuffer? = nil, dir: Int32 = 1, cpuMs: Double = 0, gpuRectifyMs: Double = 0, retained: [AnyObject]) {
+    init(color: MTLTexture, pairLeft: MTLTexture? = nil, right: MTLTexture?, target: DepthTarget, K: Intrinsics, image: CVPixelBuffer, gpuMs: Double, baselineMM: Float, baselineDeg: Float = 0, pairLeftPB: CVPixelBuffer? = nil, dir: Int32 = 1, readbackMs: Double = 0, matchMs: Double = 0, depthMs: Double = 0, gpuRectifyMs: Double = 0, retained: [AnyObject]) {
         self.color = color
         self.pairLeft = pairLeft
         self.right = right
@@ -39,7 +48,9 @@ final class StereoFrame: @unchecked Sendable {
         self.K = K
         self.image = image
         self.gpuMs = gpuMs
-        self.cpuMs = cpuMs
+        self.readbackMs = readbackMs
+        self.matchMs = matchMs
+        self.depthMs = depthMs
         self.gpuRectifyMs = gpuRectifyMs
         self.baselineMM = baselineMM
         self.baselineDeg = baselineDeg
@@ -351,6 +362,8 @@ final class StereoEngine: @unchecked Sendable {
         let rectifyMs = (cb1.gpuEndTime - cb1.gpuStartTime) * 1000
 
         // ---- 2) 读回像素 + C++ 匹配：CPU ----
+        // 计时范围：分配 + 锁定 + getBytes。分配也计入，因为“每帧两次 malloc”本身就是这一段的开销。
+        let readbackT0 = CACurrentMediaTime()
         CVPixelBufferLockBaseAddress(lpb, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(lpb, .readOnly) }
         guard let base = CVPixelBufferGetBaseAddress(lpb) else { return nil }
@@ -366,6 +379,7 @@ final class StereoEngine: @unchecked Sendable {
         }
         slot.right.getBytes(rightBytes, bytesPerRow: rightStride,
                             from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        let readbackMs = (CACurrentMediaTime() - readbackT0) * 1000
 
         let t0 = CACurrentMediaTime()
         let ok = core.matchLeft(base.assumingMemoryBound(to: UInt8.self),
@@ -374,7 +388,7 @@ final class StereoEngine: @unchecked Sendable {
                                 rightStride: rightStride, rightFormat: .rgba8,
                                 width: w, height: h, direction: Int(g.dir),
                                 disparity: disp)
-        let cpuMs = (CACurrentMediaTime() - t0) * 1000
+        let matchMs = (CACurrentMediaTime() - t0) * 1000
         guard ok else { return nil }
 
         // ---- 3) 视差 → 深度 → 回转：全部在 C++（第 4 步）----
@@ -400,7 +414,8 @@ final class StereoEngine: @unchecked Sendable {
         let retained: [AnyObject] = inp.keep + [lcv, wide]
         return StereoFrame(color: inp.wTex, pairLeft: lTex, right: slot.right, target: slot.target, K: g.K, image: inp.wpb,
                            gpuMs: rectifyMs, baselineMM: g.baselineMM, baselineDeg: g.baselineDeg,
-                           pairLeftPB: lpb, dir: g.dir, cpuMs: cpuMs + depthMs,
+                           pairLeftPB: lpb, dir: g.dir,
+                           readbackMs: readbackMs, matchMs: matchMs, depthMs: depthMs,
                            gpuRectifyMs: rectifyMs, retained: retained)
     }
 

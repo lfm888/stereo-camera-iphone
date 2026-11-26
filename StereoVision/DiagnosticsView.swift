@@ -86,7 +86,7 @@ struct DiagnosticsView: View {
                 }
 
                 Section {
-                    Text("GPU = 走 Metal 的 compute / render kernel；CPU = C++ 核心（core/）。切换深度来源为 “C++ core” 后，匹配搬到 CPU，GPU 只做矫正、视差转深度、深度回转与显示。")
+                    Text("GPU = 走 Metal 的 compute / render kernel；CPU = C++ 核心（core/）。切换深度来源为 “C++ core” 后，匹配与深度都在 CPU（只剩读回与两次矫正的单应重采样在 GPU）。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

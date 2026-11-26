@@ -154,7 +154,7 @@ struct FrameReport: Sendable {
     var analysis: Analysis
     var fps: Double
     var gpuMs: Double
-    /// C++ 路径的匹配耗时；Metal 路径为 0。
+    /// CPU 一段的总和（读回 + 匹配 + 深度）；Metal 路径为 0。
     var cpuMs: Double = 0
     var matcherName: String = "—"
     var stages: [StageDiag] = []
@@ -230,11 +230,14 @@ final class Pipeline: @unchecked Sendable {
                 StageDiag(id: 0, name: "rectify（两路单应重采样）",
                           device: .gpu, ms: f.gpuRectifyMs, note: "Metal kernel"),
                 StageDiag(id: 1, name: "像素读回",
-                          device: .cpu, ms: nil, note: "CVPixelBuffer 锁定 + MTLTexture.getBytes，约 2×0.9 MB/帧"),
-                StageDiag(id: 2, name: "census → costVolume → sgmPath×4 → wta → toDepth → unrectify",
-                          device: .cpu, ms: f.cpuMs,
-                          note: "全部在 C++：core/src/sgm.cpp + core/src/rectify.cpp；深度直接写进共享 MTLBuffer"),
-                StageDiag(id: 3, name: "显示 / 点云渲染", device: .gpu, ms: nil, note: "MTKView，每帧一次"),
+                          device: .cpu, ms: f.readbackMs,
+                          note: "CVPixelBuffer 锁定 + MTLTexture.getBytes（右图 0.9 MB）+ 每帧两次临时分配"),
+                StageDiag(id: 2, name: "census → costVolume → sgmPath×4 → wta",
+                          device: .cpu, ms: f.matchMs, note: "C++ 匹配：core/src/sgm.cpp"),
+                StageDiag(id: 3, name: "toDepth → unrectify",
+                          device: .cpu, ms: f.depthMs,
+                          note: "C++ 深度：core/src/sgm.cpp + core/src/rectify.cpp，直接写进共享 MTLBuffer"),
+                StageDiag(id: 4, name: "显示 / 点云渲染", device: .gpu, ms: nil, note: "MTKView，每帧一次"),
             ])
         case .systemDepth:
             return ("系统深度（Apple / LiDAR）", [
