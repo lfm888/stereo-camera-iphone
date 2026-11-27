@@ -65,6 +65,7 @@ else
     # 记录探针用的 spec，便于复现
     diff -u /tmp/project.yml.orig project.yml > "$OUT/project_yml_probe.diff" || true
     cp /tmp/project.yml.orig project.yml
+    rm -f project.yml.bak   # sed -i.bak 的残留
 fi
 
 if [ ! -s "$OUT/generation_status.txt" ] || ! grep -q OK "$OUT/generation_probe_status.txt" 2>/dev/null; then
