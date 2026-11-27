@@ -773,6 +773,10 @@ int stereo_process_frame(stereo_context *ctx, const stereo_frame_input *in,
 
     // rectify_image 不做格式转换（见 rectify.hpp），所以这里先统一成 BGRA8。
     // 相机原始帧就是 BGRA8，这条分支只在别的平台喂 RGB/灰度图时才走。
+    // 必须在函数作用域里声明：left/right 会指向它们，不能让它俩随 if 块结束而销毁
+    // （一开始写成块内局部变量，MSVC 侥幸能跑、gcc/clang 直接 use-after-scope）。
+    stereo_image sl{};
+    stereo_image sr{};
     const stereo_image *left = in->left;
     const stereo_image *right = in->right;
     if (left->format != STEREO_FORMAT_BGRA8 || right->format != STEREO_FORMAT_BGRA8) {
@@ -782,8 +786,8 @@ int stereo_process_frame(stereo_context *ctx, const stereo_frame_input *in,
         if (!ensure_pf_input(ctx, left->width, left->height)) {
             return fail(ctx, "process_frame: out of memory");
         }
-        stereo_image sl = *left;
-        stereo_image sr = *right;
+        sl = *left;
+        sr = *right;
         sl.data = ctx->pf_in_l.data();
         sl.stride = left->width * 4;
         sl.format = STEREO_FORMAT_BGRA8;
