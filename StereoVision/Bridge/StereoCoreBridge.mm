@@ -16,6 +16,9 @@
 
 #include "stereo/stereo_c_api.h"
 
+#include <cstdint>
+#include <vector>
+
 namespace {
 
 /// simd 是**列主序**（m.columns[c][r]），C++ 那边的 float[9] 是**行主序**（m[r*3+c]）。
