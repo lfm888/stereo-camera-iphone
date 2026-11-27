@@ -465,7 +465,6 @@ final class AppModel {
         pipeline = Pipeline(engine: engine)
         renderer = Renderer(device: device, store: pipeline.store)
         renderer.model = self
-        capture.model = self
 
         let p = pipeline
         camera.onStereo = { p.stereo($0, $1) }

@@ -198,8 +198,8 @@ extension Capture {
 
         var mm = [UInt16](repeating: 0, count: f.width * f.height)
         mm.withUnsafeMutableBufferPointer { out in
-            _ = SVExporter.depthToMillimetres(s.depth, stride: f.width, width: f.width,
-                                              height: f.height, out: out.baseAddress!)
+            _ = SVExporter.depth(toMillimetres: s.depth, stride: f.width, width: f.width,
+                                 height: f.height, out: out.baseAddress!)
         }
         let depthData = mm.withUnsafeBytes { Data($0) }
         if let provider = CGDataProvider(data: depthData as CFData),
