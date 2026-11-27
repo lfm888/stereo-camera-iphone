@@ -13,7 +13,7 @@ struct StereoVisionApp: App {
 /// 界面本身在三个文件里：
 ///   CaptureScreen.swift     主拍摄界面（含 HUD 与右侧功能条）
 ///   SettingsScreen.swift    参数设置（草稿 + Apply）
-///   DiagnosticsScreen.swift GPU/CPU 诊断（零输入，纯只读面板）
+///   DiagnosticsScreen.swift GPU/CPU 诊断（和设置一样是整屏 sheet，内容只读）
 struct ContentView: View {
     @State private var model = AppModel()
     @State private var showSettings = false
@@ -23,7 +23,6 @@ struct ContentView: View {
         CaptureScreen(state: model.ui,
                       intents: model,
                       renderer: model.renderer,
-                      diagnostics: model.diagnostics,
                       showSettings: $showSettings,
                       showDiagnostics: $showDiagnostics)
             .background(Color.black.ignoresSafeArea())
@@ -37,6 +36,10 @@ struct ContentView: View {
                                overlayAlpha: model.overlayAlpha,
                                intents: model,
                                onDismiss: { showSettings = false })
+            }
+            .sheet(isPresented: $showDiagnostics) {
+                DiagnosticsScreen(snapshot: model.diagnostics,
+                                  onDismiss: { showDiagnostics = false })
             }
     }
 }

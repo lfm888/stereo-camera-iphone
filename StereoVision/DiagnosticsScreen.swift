@@ -58,6 +58,8 @@ struct DiagnosticsSnapshot {
 /// 深度回转与显示；光看帧率看不出是哪个阶段变慢、GPU 有没有真的闲下来。
 struct DiagnosticsScreen: View {
     let snapshot: DiagnosticsSnapshot
+    /// 关掉自己。诊断内容本身只读，这个回调只负责收起 sheet。
+    let onDismiss: () -> Void
 
     private var r: DiagnosticsSnapshot { snapshot }
 
@@ -106,11 +108,9 @@ struct DiagnosticsScreen: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .scrollContentBackground(.hidden)
             .navigationTitle("GPU / CPU 诊断")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Done", action: onDismiss) }
         }
-        // 它是盖在预览上的叠加面板（不是 sheet），所以自己铺一层半透明底。
-        .background(.black.opacity(0.88))
     }
 }

@@ -10,7 +10,6 @@ struct CaptureScreen: View {
     let state: CaptureUIState
     let intents: CaptureIntents
     let renderer: Renderer
-    let diagnostics: DiagnosticsSnapshot
     @Binding var showSettings: Bool
     @Binding var showDiagnostics: Bool
 
@@ -25,11 +24,6 @@ struct CaptureScreen: View {
                     ZStack {
                         MetalView(renderer: renderer)
                         OverlayView(state: state)
-                        // 诊断是**叠加面板**，盖住预览区但不盖功能条 ——
-                        // 这样关掉它靠功能条上同一个按钮，诊断页自己不需要任何输入。
-                        if showDiagnostics {
-                            DiagnosticsScreen(snapshot: diagnostics)
-                        }
                     }
                     .contentShape(Rectangle())
                     .gesture(SpatialTapGesture().onEnded { v in
@@ -165,9 +159,8 @@ struct SidePanel: View {
                         .foregroundStyle(.red)
                 }
                 .accessibilityLabel(state.isRecording ? "Stop recording" : "Record video")
-                // 同一个按钮既是开也是关：诊断页因此不需要自己的关闭按钮。
                 button("waveform.path.ecg", "GPU / CPU diagnostics", selected: showDiagnostics) {
-                    showDiagnostics.toggle()
+                    showDiagnostics = true
                 }
                 button("slider.horizontal.3", "Settings", selected: false) { showSettings = true }
             }
