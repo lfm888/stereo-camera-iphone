@@ -81,10 +81,14 @@ if ! gem list -i xcodeproj >/dev/null 2>&1; then
 fi
 cat > /tmp/list_sources.rb <<'RUBY'
 require "xcodeproj"
+# 按**真实路径**比较，而不是 file_ref.path：同一个文件在不同工程里可能是
+# "core/src/sgm.cpp" 也可能是 group 内的 "sgm.cpp"，写法差异不该算差异。
+root = File.realpath(File.dirname(ARGV[0]))
 proj = Xcodeproj::Project.open(ARGV[0])
 proj.targets.sort_by(&:name).each do |t|
     puts "### target: #{t.name} (#{t.product_type})"
-    files = t.source_build_phase.files.map { |f| f.file_ref&.path.to_s }.reject(&:empty?).sort
+    files = t.source_build_phase.files.filter_map { |f| f.file_ref&.real_path&.to_s }
+    files = files.map { |f| f.start_with?(root) ? f[(root.length + 1)..] : f }.sort
     files.each { |f| puts "  #{f}" }
 end
 RUBY
