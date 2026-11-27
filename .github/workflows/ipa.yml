@@ -12,6 +12,7 @@ on:
       - "project.yml"
       # 校验脚本参与构建（scripts/check_xcodeproj_sources.sh），改了它必须重跑
       - "scripts/**"
+      - "tools/check_api_surface.py"
 
 # 工程文件**由 CI 从 project.yml 生成**（不依赖仓库里提交的 .xcodeproj）：
 #   1) xcodegen generate --spec project.yml
@@ -32,6 +33,13 @@ jobs:
 
       # 工程文件由 project.yml 生成，不再依赖仓库里提交的 .xcodeproj。
       # 本文件观察到的是 xcodegen 2.46.0；版本漂移只告警不阻断（pbxproj 每次都是全新的）。
+      # 契约与边界检查：C API 表面快照 + 目录/依赖红线（与 core.yml 同一套脚本）
+      - name: Contract checks (C API surface + layering)
+        run: |
+          set -euo pipefail
+          python3 tools/check_api_surface.py
+          bash scripts/check_layering.sh
+
       - name: Generate project from project.yml
         run: |
           set -euo pipefail

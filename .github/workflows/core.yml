@@ -11,10 +11,14 @@ on:
     branches: [main, test]
     paths:
       - "core/**"
+      - "tools/check_api_surface.py"
+      - "scripts/check_layering.sh"
       - ".github/workflows/core.yml"
   pull_request:
     paths:
       - "core/**"
+      - "tools/check_api_surface.py"
+      - "scripts/check_layering.sh"
       - ".github/workflows/core.yml"
   workflow_dispatch:
 
@@ -33,6 +37,18 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # 契约与边界检查：C API 表面快照 + 目录/依赖红线。
+      # 放在编译之前：违反约定的提交连编译机会都没有，日志里直接看到哪一行。
+      - name: Contract checks (C API surface + layering)
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=python3
+          command -v python3 >/dev/null 2>&1 || PY=python
+          echo "python: $PY ($("$PY" -V 2>&1))"
+          "$PY" tools/check_api_surface.py
+          bash scripts/check_layering.sh
 
       - name: Configure
         run: cmake -S core -B build/core -DCMAKE_BUILD_TYPE=Release

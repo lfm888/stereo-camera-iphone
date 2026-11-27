@@ -1,0 +1,25 @@
+# C API 公开符号基线：<函数名> <参数个数>。由 tools/check_api_surface.py --update 生成。
+stereo_analyze 12
+stereo_analyze_grid 4
+stereo_calibrate 6
+stereo_calibrate_search 4
+stereo_config_default 1
+stereo_configure 2
+stereo_copy_depth 5
+stereo_create 0
+stereo_depth_filter 8
+stereo_depth_to_u16_mm 5
+stereo_destroy 1
+stereo_disparity_to_depth 10
+stereo_last_error 1
+stereo_match 6
+stereo_param_count 0
+stereo_param_find 1
+stereo_param_table 0
+stereo_point_cloud 15
+stereo_point_cloud_capacity 2
+stereo_process_frame 4
+stereo_rectify_geometry 2
+stereo_rectify_image 3
+stereo_sample_depth 11
+stereo_unrectify_depth 9
