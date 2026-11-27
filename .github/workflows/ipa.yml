@@ -11,9 +11,10 @@ on:
       - "Config/**"
       - "project.yml"
 
-# 注意：三个流水线都**直接编译仓库里提交的** StereoVision.xcodeproj，不跑 xcodegen。
-# 所以改了 project.yml 之后必须在本地 `xcodegen generate` 并工程文件一起提交，
-# 否则 CI 用的是旧工程，新增的源码（例如 core/）根本不会被编译，而且不会报错。
+# 工程文件**由 CI 从 project.yml 生成**（不依赖仓库里提交的 .xcodeproj）：
+#   1) xcodegen generate --spec project.yml
+#   2) bash scripts/check_xcodeproj_sources.sh   ← 漏文件会当场失败
+# 本地改了 sources 不需要再手动改 pbxproj。
 
 permissions:
   contents: read
@@ -27,27 +28,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 工程文件由 project.yml 生成，不再依赖仓库里提交的 .xcodeproj。
+      # 本文件观察到的是 xcodegen 2.46.0；版本漂移只告警不阻断（pbxproj 每次都是全新的）。
+      - name: Generate project from project.yml
+        run: |
+          set -euo pipefail
+          brew install xcodegen || brew upgrade xcodegen || true
+          echo "xcodegen: $(xcodegen --version)"
+          case "$(xcodegen --version)" in
+            *2.46.0*) ;;
+            *) echo "::warning::xcodegen 版本与记录不同，构建产物可能有细微差异" ;;
+          esac
+          xcodegen generate --spec project.yml
+          xcodebuild -list -project StereoVision.xcodeproj
+
+      # 生成器只看 project.yml 的 sources：漏掉一个文件时 xcodebuild 仍然成功，
+      # 只是那个文件不参与编译。这一步让它当场失败。
+      - name: Verify every source file is in the generated project
+        run: bash scripts/check_xcodeproj_sources.sh
+
       - name: Show toolchain
         run: |
           uname -m
           xcodebuild -version
           xcrun --find metal
-          xcodebuild -project StereoVision.xcodeproj -list
-
-      # 临时诊断（任务书第 1.2 步）：把"提交的工程 vs project.yml 生成的工程"的差异落成 artifact。
-      # 不阻断构建；第 1.4 步切换完成后连同 scripts/ci_diff_xcodeproj.sh 一起删掉。
-      - name: Diagnose xcodeproj vs project.yml (non-blocking)
-        id: xcodeproj_diff
-        continue-on-error: true
-        run: bash scripts/ci_diff_xcodeproj.sh
-
-      - name: Upload xcodeproj diagnostic artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: xcodeproj-diagnostic
-          path: ci-artifacts/
-          if-no-files-found: warn
 
       - name: Build (no code signing)
         run: |

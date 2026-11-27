@@ -14,10 +14,16 @@ workflows:
           xcodebuild -version
           sw_vers
           xcrun --find metal || echo "no metal compiler"
-      # 临时诊断（任务书第 1.2 步），不阻断构建
-      - name: Diagnose xcodeproj vs project.yml
+      - name: Generate project from project.yml
         script: |
-          bash scripts/ci_diff_xcodeproj.sh || true
+          set -e
+          brew install xcodegen || brew upgrade xcodegen || true
+          echo "xcodegen: $(xcodegen --version)"
+          xcodegen generate --spec project.yml
+          xcodebuild -list -project StereoVision.xcodeproj
+      - name: Verify every source file is in the generated project
+        script: |
+          bash scripts/check_xcodeproj_sources.sh
       - name: Build without code signing
         script: |
           set -o pipefail
@@ -38,5 +44,4 @@ workflows:
           ls -lh StereoVision-unsigned.ipa
     artifacts:
       - StereoVision-unsigned.ipa
-      - ci-artifacts/
       - build/Build/Products/Release-iphoneos/StereoVision.app
