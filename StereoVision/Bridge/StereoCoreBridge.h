@@ -22,6 +22,9 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/// 分析结果容器（定义在本文件后面）。这里先前置声明，因为 SVStereoCore 的方法要用它。
+@class SVAnalysis;
+
 /// 像素字节顺序，与 core/include/stereo/stereo_c_api.h 的 enum stereo_format 一一对应。
 typedef NS_ENUM(NSInteger, SVImageFormat) {
     SVImageFormatRGB8  NS_SWIFT_NAME(rgb8)  = 0,
