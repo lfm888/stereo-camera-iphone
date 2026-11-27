@@ -611,20 +611,7 @@ float sv_calibrate_score(void *user, int flip, float dy) {
 
 // MARK: - 全流水线（stereo_process_frame）
 
-@interface SVFrameRequest ()
-@property (nonatomic, readwrite) NSInteger maxDisparity;
-@property (nonatomic, readwrite) NSInteger p1;
-@property (nonatomic, readwrite) NSInteger p2;
-@property (nonatomic, readwrite) float uniqueness;
-@property (nonatomic, readwrite) BOOL lrCheck;
-@property (nonatomic, readwrite) float minZ;
-@property (nonatomic, readwrite) float maxZ;
-@property (nonatomic, readwrite) simd_float4 centerRect;
-@property (nonatomic, readwrite) float centerQ;
-@property (nonatomic, readwrite) BOOL computeCenter;
-@property (nonatomic, readwrite) NSInteger maxBlobs;
-@property (nonatomic, readwrite) NSInteger minCells;
-@end
+// SVFrameRequest 的属性在头文件里就是 readwrite（纯输入），不需要类扩展。
 
 @interface SVFrameTimings ()
 @property (nonatomic, readwrite) double rectify;
