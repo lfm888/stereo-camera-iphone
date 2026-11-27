@@ -174,6 +174,93 @@ enum PipelineKind {
     case systemDepth
 }
 
+// MARK: - 界面与状态之间的契约
+//
+// 三个界面只认这几样东西：
+//   CaptureUIState / DiagnosticsSnapshot / DeviceInfo  —— 只读入参（值类型，界面改不了状态）
+//   CaptureIntents / SettingsIntents                    —— 唯一可写入口
+// 于是“诊断页不会偷改状态”是编译器保证的，不靠约定。
+
+/// 设置页编辑的**引擎参数草稿**。
+///
+/// 改动在点 Apply 之前不进管线：换 maxDisparity 会让 C++ context 重新分配缓冲区，
+/// 所以不能拖一下滑杆就生效。
+struct SettingsDraft {
+    var minZ: Float = 0.12
+    var maxZ: Float = 3
+    var uniqueness: Float = 0.1
+    var maxDisparity = 64
+    var matcher = Matcher.sgm
+    var lrCheck = true
+    var p1: Float = 8
+    var p2: Float = 96
+    var yOffset: Float = 0
+    var flip = false
+}
+
+/// 只读的设备/标定信息。
+struct DeviceInfo {
+    var source: DepthSource
+    var isMultiCam: Bool
+    var baselineMM: Float
+    var baselineDeg: Float
+    var intrinsics: Intrinsics
+    var depthSize: CGSize
+}
+
+/// 主界面的只读状态。
+struct CaptureUIState {
+    var mode: ViewMode
+    var source: DepthSource
+    var aspect: CGFloat
+    var orientation: DisplayOrientation
+    var fps: Double
+    var device: DeviceInfo
+    var hasExtrinsics: Bool
+    var calibrating: Bool
+    var status: String?
+    var draft: SettingsDraft
+    var overlayAlpha: Float
+    var yaw: Float
+    var pitch: Float
+    var orbit: Float
+    var gpuSummary: String
+    var analysis: Analysis
+    var tap: CGPoint?
+    var tapDistance: Float?
+    var isRecording: Bool
+    var recordingStart: Date?
+    var captureMessage: String?
+}
+
+/// 主拍摄界面能做的事。
+@MainActor
+protocol CaptureIntents {
+    func startCapture() async
+    func selectMode(_ mode: ViewMode)
+    func selectNextSource()
+    func autoCalibrate()
+    func takePhoto()
+    func toggleRecording()
+    func measureTap(at normalized: CGPoint)
+    func setOrbit(yaw: Float, pitch: Float)
+    func setOrbitDistance(_ orbit: Float)
+    func resetOrbit()
+}
+
+/// 设置界面能做的事。
+@MainActor
+protocol SettingsIntents {
+    var draft: SettingsDraft { get }
+    var device: DeviceInfo { get }
+    var overlayAlpha: Float { get }
+    func apply(_ draft: SettingsDraft)
+    func setOverlayAlpha(_ value: Float)
+    func setSource(_ source: DepthSource)
+    func autoCalibrate()
+    func runCoreSelfTest()
+}
+
 final class FrameStore: @unchecked Sendable {
     private let lock = NSLock()
     private var frame: StereoFrame?
@@ -268,22 +355,28 @@ final class Pipeline: @unchecked Sendable {
 @Observable
 final class AppModel {
     private(set) var source: DepthSource = .stereo
-    var mode: ViewMode = .standard
-    var minZ: Float = 0.12 { didSet { push { $0.minZ = self.minZ } } }
-    var maxZ: Float = 3 { didSet { push { $0.maxZ = self.maxZ } } }
-    var uniqueness: Float = 0.1 { didSet { push { $0.uniqueness = self.uniqueness } } }
-    var maxDisparity = 64 { didSet { push { $0.maxDisparity = self.maxDisparity } } }
-    var matcher = Matcher.sgm { didSet { push { $0.matcher = self.matcher } } }
-    var lrCheck = true { didSet { push { $0.lrCheck = self.lrCheck } } }
-    var p1: Float = 8 { didSet { push { $0.p1 = Int(self.p1) } } }
-    var p2: Float = 96 { didSet { push { $0.p2 = Int(self.p2) } } }
-    var yOffset: Float = 0 { didSet { push { $0.yOffset = self.yOffset } } }
-    var flip = false { didSet { push { $0.flip = self.flip } } }
-    var overlayAlpha: Float = 0.55
-    var yaw: Float = 0
-    var pitch: Float = 0
-    var orbit: Float = 1.2
-    var calibrating = false
+    private(set) var mode: ViewMode = .standard
+
+    // ---- 引擎参数：只能经由 apply(_ draft:) 或自动标定修改 ----
+    // 不再用 didSet 逐字段 push —— 11 个字段要是一次提交就只推一次，
+    // 否则 Settings 拖一下会往管线里塞 11 次。
+    private(set) var minZ: Float = 0.12
+    private(set) var maxZ: Float = 3
+    private(set) var uniqueness: Float = 0.1
+    private(set) var maxDisparity = 64
+    private(set) var matcher = Matcher.sgm
+    private(set) var lrCheck = true
+    private(set) var p1: Float = 8
+    private(set) var p2: Float = 96
+    private(set) var yOffset: Float = 0
+    private(set) var flip = false
+
+    // ---- 纯显示状态：即时生效，不进管线 ----
+    private(set) var overlayAlpha: Float = 0.55
+    private(set) var yaw: Float = 0
+    private(set) var pitch: Float = 0
+    private(set) var orbit: Float = 1.2
+    private(set) var calibrating = false
 
     /// HUD 用的一行摘要：GPU / CPU 各占多少。
     var gpuStagesSummary: String {
@@ -311,6 +404,50 @@ final class AppModel {
     private(set) var status: String?
     private(set) var tap: CGPoint?
     private(set) var tapDistance: Float?
+
+    // MARK: - 给界面的只读视图（界面不再直接拿 AppModel 读一堆字段）
+
+    /// 当前的引擎参数，作为设置页草稿的初值。
+    var draft: SettingsDraft {
+        var d = SettingsDraft()
+        d.minZ = minZ
+        d.maxZ = maxZ
+        d.uniqueness = uniqueness
+        d.maxDisparity = maxDisparity
+        d.matcher = matcher
+        d.lrCheck = lrCheck
+        d.p1 = p1
+        d.p2 = p2
+        d.yOffset = yOffset
+        d.flip = flip
+        return d
+    }
+
+    /// 只读的设备/标定信息。
+    var device: DeviceInfo {
+        DeviceInfo(source: source, isMultiCam: source.isMultiCam, baselineMM: baselineMM,
+                   baselineDeg: baselineDeg, intrinsics: K, depthSize: depthSize)
+    }
+
+    /// 主界面的只读状态（HUD / 侧栏 / 叠层全从它渲染）。
+    var ui: CaptureUIState {
+        CaptureUIState(mode: mode, source: source, aspect: aspect, orientation: orientation,
+                       fps: fps, device: device, hasExtrinsics: hasExtrinsics,
+                       calibrating: calibrating, status: status, draft: draft,
+                       overlayAlpha: overlayAlpha, yaw: yaw, pitch: pitch, orbit: orbit,
+                       gpuSummary: gpuStagesSummary, analysis: analysis,
+                       tap: tap, tapDistance: tapDistance,
+                       isRecording: capture.isRecording, recordingStart: capture.recordingStart,
+                       captureMessage: capture.message)
+    }
+
+    /// 诊断页的只读快照。
+    var diagnostics: DiagnosticsSnapshot {
+        DiagnosticsSnapshot(sourceTitle: source.title, matcherName: gpuReport.matcherName,
+                            fps: fps, gpuMs: gpuReport.gpuMs, cpuMs: gpuReport.cpuMs,
+                            allocatedMB: gpuReport.allocatedMB, workingSetMB: gpuReport.workingSetMB,
+                            depthSize: depthSize, stages: gpuReport.stages)
+    }
 
     @ObservationIgnored let pipeline: Pipeline
     @ObservationIgnored let renderer: Renderer
@@ -538,7 +675,72 @@ final class AppModel {
             flip = c.flip
             yOffset = c.dy
             calibrating = false
+            // 自动标定的结果也要进管线。以前靠 didSet 推送，现在集中在这里。
+            push { $0.flip = c.flip; $0.yOffset = c.dy }
         }
         if tap != nil { tapDistance = sampleTap() }
+    }
+}
+
+// MARK: - 意图实现（界面唯一可写入口）
+
+extension AppModel: CaptureIntents {
+    func startCapture() async { await start() }
+
+    func selectMode(_ mode: ViewMode) { self.mode = mode }
+
+    func selectNextSource() {
+        let all = DepthSource.available
+        guard !all.isEmpty else { return }
+        setSource(all[((all.firstIndex(of: source) ?? 0) + 1) % all.count])
+    }
+
+    func autoCalibrate() { calibrate() }
+
+    func takePhoto() { capture.takePhoto() }
+
+    func toggleRecording() { capture.toggleRecording() }
+
+    func measureTap(at normalized: CGPoint) { measure(at: normalized) }
+
+    func setOrbit(yaw: Float, pitch: Float) {
+        self.yaw = yaw
+        self.pitch = min(1.4, max(-1.4, pitch))
+    }
+
+    func setOrbitDistance(_ orbit: Float) {
+        self.orbit = min(8, max(0.2, orbit))
+    }
+}
+
+extension AppModel: SettingsIntents {
+    /// 草稿一次性提交：10 个字段只往管线里推一遍。
+    func apply(_ d: SettingsDraft) {
+        minZ = d.minZ
+        maxZ = d.maxZ
+        uniqueness = d.uniqueness
+        maxDisparity = d.maxDisparity
+        matcher = d.matcher
+        lrCheck = d.lrCheck
+        p1 = d.p1
+        p2 = d.p2
+        yOffset = d.yOffset
+        flip = d.flip
+        push {
+            $0.minZ = d.minZ
+            $0.maxZ = d.maxZ
+            $0.uniqueness = d.uniqueness
+            $0.maxDisparity = d.maxDisparity
+            $0.matcher = d.matcher
+            $0.lrCheck = d.lrCheck
+            $0.p1 = Int(d.p1)
+            $0.p2 = Int(d.p2)
+            $0.yOffset = d.yOffset
+            $0.flip = d.flip
+        }
+    }
+
+    func setOverlayAlpha(_ value: Float) {
+        overlayAlpha = min(1, max(0, value))
     }
 }

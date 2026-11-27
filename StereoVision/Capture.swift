@@ -129,7 +129,7 @@ final class Capture {
                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return }
         let lw: CGFloat = 720, lh = lw * CGFloat(h) / CGFloat(w)
         ctx.scaleBy(x: CGFloat(w) / lw, y: CGFloat(h) / lh)
-        ImageRenderer(content: OverlayView(model: model, hints: false).frame(width: lw, height: lh)).render { _, draw in draw(ctx) }
+        ImageRenderer(content: OverlayView(state: model.ui, hints: false).frame(width: lw, height: lh)).render { _, draw in draw(ctx) }
     }
 
     private func flash(_ text: String) {
