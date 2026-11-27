@@ -17,8 +17,9 @@
 //    ❌ 任何几何推导（矫正旋转、单应、视差→深度）—— 那些在 core/src/geometry.cpp，
 //       也就是第 2 步。这里只搬数，不解方程。
 //
-//  以后要加前置相机 / 深度相机：往 CameraRole 里加 case，加一个
-//  `calibration(of:)` 的调用点即可，不要在这个文件里写算法。
+//  以后要加前置相机 / 深度相机：在这个文件里加一个 `CalibrationSource` 的
+//  `static func`（或给 `DVDepthData` 那一条加一支），然后把内参交给
+//  `StereoEngine` / `SVRectifyInput` 即可。不要在这里写任何几何推导。
 //
 
 import AVFoundation
@@ -38,22 +39,12 @@ struct Intrinsics: Sendable {
     var cy: Float = 0
 }
 
-/// 相机角色。加新相机就从这里长（前置、深度、长焦……）。
-enum CameraRole: String, Sendable, CaseIterable {
-    case wide
-    case ultraWide
-    case front
-    /// LiDAR / 系统深度输出（AVDepthData 自带内参）
-    case lidarDepth
-}
-
 /// 一台相机读到的标定信息。
+///
+/// 内参的单位是**这一帧的原始图像像素**；要换分辨率就按 `新宽/原宽` 缩放
+/// （C++ 的 rectification 就是这么做的，见 `RectifyInput.src_width`）。
 struct CameraCalibration: Sendable {
-    var role: CameraRole
-    /// 内参，单位是 `referenceSize` 对应的原始图像像素。
     var intrinsics: Intrinsics
-    /// 读内参时那一帧的尺寸。内参跟着它走；要换分辨率就按比例缩放。
-    var referenceSize: SIMD2<Float>
     var fovDeg: Float
 }
 
@@ -90,7 +81,6 @@ enum CalibrationSource {
     ///   - size: 这一帧的像素尺寸（缩放后分辨率的帧要传缩放后的尺寸）。
     ///   - fov: 该相机的 `activeFormat.videoFieldOfView`（度，水平）。
     static func intrinsics(of sampleBuffer: CMSampleBuffer,
-                            role: CameraRole,
                             fov: Float,
                             size: SIMD2<Float>) -> CameraCalibration {
         let fallback = pinhole(fovDeg: fov, size: size)
@@ -104,16 +94,15 @@ enum CalibrationSource {
         } else {
             k = fallback
         }
-        return CameraCalibration(role: role, intrinsics: k, referenceSize: size, fovDeg: fov)
+        return CameraCalibration(intrinsics: k, fovDeg: fov)
     }
 
-    /// 直接从设备读（不看具体一帧）。给前置相机、以及"还没开流就要知道参数"的场合用。
-    static func calibration(of device: AVCaptureDevice, role: CameraRole) -> CameraCalibration {
+    /// 直接从设备读（不看具体一帧）。"还没开流就要知道参数"的场合用它。
+    static func calibration(of device: AVCaptureDevice) -> CameraCalibration {
         let fov = device.activeFormat.videoFieldOfView
         let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
         let size = SIMD2<Float>(Float(dims.width), Float(dims.height))
-        return CameraCalibration(role: role, intrinsics: pinhole(fovDeg: fov, size: size),
-                                 referenceSize: size, fovDeg: fov)
+        return CameraCalibration(intrinsics: pinhole(fovDeg: fov, size: size), fovDeg: fov)
     }
 
     /// 两台相机的外参。`from` / `to` 是 constituent device。
@@ -138,8 +127,8 @@ enum CalibrationSource {
 
     /// 双摄整套参数（宽 + 超广角）。
     static func rig(wide: AVCaptureDevice, ultra: AVCaptureDevice) -> CameraRig {
-        CameraRig(wide: calibration(of: wide, role: .wide),
-                  ultra: calibration(of: ultra, role: .ultraWide),
+        CameraRig(wide: calibration(of: wide),
+                  ultra: calibration(of: ultra),
                   extrinsics: extrinsics(from: ultra, to: wide))
     }
 

@@ -21,6 +21,7 @@ add_library(stereo_core STATIC
     src/sample.cpp
     src/analyze.cpp
     src/cloud.cpp
+    src/calibrate.cpp
     src/stereo_c_api.cpp
 )
 target_include_directories(stereo_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -53,6 +54,10 @@ target_link_libraries(analyze_test PRIVATE stereo_core)
 add_executable(cloud_test tests/cloud_test.cpp)
 target_link_libraries(cloud_test PRIVATE stereo_core)
 
+# 自动标定搜索：注入已知的行偏移，看它能不能找回来。
+add_executable(calibrate_test tests/calibrate_test.cpp)
+target_link_libraries(calibrate_test PRIVATE stereo_core)
+
 # 让 `ctest` / `cmake --build . --target golden_test` 之后能直接跑对拍
 enable_testing()
 add_test(NAME golden COMMAND golden_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden)
@@ -60,3 +65,4 @@ add_test(NAME c_api COMMAND c_api_smoke)
 add_test(NAME geometry COMMAND geometry_test)
 add_test(NAME analyze COMMAND analyze_test)
 add_test(NAME cloud COMMAND cloud_test)
+add_test(NAME calibrate COMMAND calibrate_test)

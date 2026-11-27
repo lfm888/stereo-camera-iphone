@@ -104,6 +104,8 @@ final class StereoEngine: @unchecked Sendable {
     /// 第 1 步（Calibration.swift）读到的双摄参数。只要 session 建起来就有值，
     /// `hasExtrinsics == false` 表示系统没给外参、用的是回退值。
     private var rig: CameraRig?
+    /// 打分时读回 cost 纹理的复用缓冲（0.9 MB，避免每帧分配）。
+    private var costScratch: [Float] = []
     var hasExtrinsics: Bool { rig?.hasExtrinsics ?? false }
 
     /// C++ 核心上下文：CPU 匹配、视差→深度、深度回转、点选测距、连通域分析共用它。
@@ -191,8 +193,8 @@ final class StereoEngine: @unchecked Sendable {
     }
 
     /// 读一帧的内参。第 1 步的实际入口是 Calibration.swift，这里只是补上角色与视场角。
-    private func intrinsics(_ sb: CMSampleBuffer, role: CameraRole, fov: Float, size: SIMD2<Float>) -> Intrinsics {
-        CalibrationSource.intrinsics(of: sb, role: role, fov: fov, size: size).intrinsics
+    private func intrinsics(_ sb: CMSampleBuffer, fov: Float, size: SIMD2<Float>) -> Intrinsics {
+        CalibrationSource.intrinsics(of: sb, fov: fov, size: size).intrinsics
     }
 
     /// 第 2 步：极线矫正的几何。
@@ -273,8 +275,8 @@ final class StereoEngine: @unchecked Sendable {
               let (wTex, wcv) = texture(wpb), let (uTex, ucv) = texture(upb) else { return nil }
         let ws = SIMD2(Float(wTex.width), Float(wTex.height)), us = SIMD2(Float(uTex.width), Float(uTex.height))
         return Inputs(wTex: wTex, uTex: uTex, wpb: wpb, upb: upb,
-                      KW: intrinsics(wide, role: .wide, fov: rig?.wide.fovDeg ?? 70, size: ws),
-                      KU: intrinsics(ultra, role: .ultraWide, fov: rig?.ultra.fovDeg ?? 108, size: us),
+                      KW: intrinsics(wide, fov: rig?.wide.fovDeg ?? 70, size: ws),
+                      KU: intrinsics(ultra, fov: rig?.ultra.fovDeg ?? 108, size: us),
                       keep: [wcv, ucv])
     }
 
@@ -396,43 +398,46 @@ final class StereoEngine: @unchecked Sendable {
                            gpuRectifyMs: rectifyMs, retained: retained)
     }
 
+    /// 第 1 步的自动化：找让两路行对齐得最好的 (flip, dy)。
+    ///
+    /// **搜索策略在 C++**（core/src/calibrate.cpp：2×25 个候选 + 4 次细化 + 取最小），
+    /// **打分留在 GPU**（这个文件里的 `score`，即 rectify + census + cost 三个 kernel）。
+    /// 这样分工的理由很实际：CPU 上算一遍打分要 60~80 ms，54 次就是 4 秒；
+    /// 而"该试哪些候选、怎么细化、怎么比较"才是算法，那部分现在在 C++ 里。
     func calibrate(_ wide: CMSampleBuffer, _ ultra: CMSampleBuffer, _ s: PipelineSettings) -> (flip: Bool, dy: Float) {
         guard let inp = inputs(wide, ultra) else { return (s.flip, s.yOffset) }
+        guard let r = SVStereoCore.calibrate({ [self] flipped, dy in
+            self.score(flipped: flipped, dy: dy, inp: inp, s: s)
+        }, flip0: s.flip, dy0: s.yOffset) else { return (s.flip, s.yOffset) }
+        return (r.flipped, r.yOffset)
+    }
+
+    /// 一次打分：两路按候选几何重采样 → Census → 块匹配代价 → 取非负值的平均。
+    /// 返回 .infinity 表示这次打分失败（参数非法 / 没有有效像素）。
+    private func score(flipped: Bool, dy: Float, inp: Inputs, s: PipelineSettings) -> Float {
         let slot = slots[0]
+        guard let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width),
+                               flip: flipped, dy: dy),
+              let cb = queue.makeCommandBuffer(),
+              let enc = cb.makeComputeCommandEncoder() else { return .infinity }
+        encodeRectify(enc, inp.wTex, slot.right, g.MW)
+        dispatch(enc, censusPSO, [slot.right, slot.censusL])
+        encodeRectify(enc, inp.uTex, slot.right, g.MU)
+        dispatch(enc, censusPSO, [slot.right, slot.censusR])
+        encodeMatch(enc, slot, g, s)
+        enc.endEncoding()
+        cb.commit()
+        cb.waitUntilCompleted()
+
         let n = Self.workW * Self.workH
-        var costs = [Float](repeating: 0, count: n)
-
-        func score(flip: Bool, dy: Float) -> Float {
-            guard let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), flip: flip, dy: dy),
-                  let cb = queue.makeCommandBuffer(), let enc = cb.makeComputeCommandEncoder() else { return .infinity }
-            encodeRectify(enc, inp.wTex, slot.right, g.MW)
-            dispatch(enc, censusPSO, [slot.right, slot.censusL])
-            encodeRectify(enc, inp.uTex, slot.right, g.MU)
-            dispatch(enc, censusPSO, [slot.right, slot.censusR])
-            encodeMatch(enc, slot, g, s)
-            enc.endEncoding()
-            cb.commit()
-            cb.waitUntilCompleted()
-            costs.withUnsafeMutableBytes {
-                slot.cost.getBytes($0.baseAddress!, bytesPerRow: Self.workW * 4, from: MTLRegionMake2D(0, 0, Self.workW, Self.workH), mipmapLevel: 0)
-            }
-            var sum: Float = 0, cnt: Float = 0
-            for c in costs where c >= 0 { sum += c; cnt += 1 }
-            return cnt > 0 ? sum / cnt : .infinity
+        if costScratch.count != n { costScratch = [Float](repeating: 0, count: n) }
+        costScratch.withUnsafeMutableBytes {
+            slot.cost.getBytes($0.baseAddress!, bytesPerRow: Self.workW * 4,
+                               from: MTLRegionMake2D(0, 0, Self.workW, Self.workH), mipmapLevel: 0)
         }
-
-        var best = (flip: s.flip, dy: s.yOffset, score: Float.infinity)
-        for flip in [false, true] {
-            for i in -12...12 {
-                let v = score(flip: flip, dy: Float(i))
-                if v < best.score { best = (flip, Float(i), v) }
-            }
-        }
-        for d in [-0.5, -0.25, 0.25, 0.5] as [Float] {
-            let v = score(flip: best.flip, dy: best.dy + d)
-            if v < best.score { best = (best.flip, best.dy + d, v) }
-        }
-        return (best.flip, best.dy)
+        // 归约在 Bridge 里做（Swift 侧不做逐元素运算）
+        let mean = SVExporter.meanNonNegative(costScratch, count: n)
+        return mean.isFinite ? mean : .infinity
     }
 
     func depthData(_ video: CMSampleBuffer, _ depthData: AVDepthData, _ s: PipelineSettings) -> StereoFrame? {

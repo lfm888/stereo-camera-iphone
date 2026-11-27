@@ -16,6 +16,7 @@
 
 #include "stereo/stereo_c_api.h"
 
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
@@ -443,12 +444,75 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
                                minZ, maxZ) == 0;
 }
 
++ (float)meanNonNegative:(const float *)values count:(NSInteger)count {
+    if (values == nullptr || count <= 0) return NAN;
+    double sum = 0.0;
+    long long hits = 0;
+    for (NSInteger i = 0; i < count; ++i) {
+        if (values[i] >= 0.0f) {
+            sum += values[i];
+            ++hits;
+        }
+    }
+    return hits == 0 ? NAN : static_cast<float>(sum / static_cast<double>(hits));
+}
+
 + (BOOL)copyDepth:(const float *)src
         srcStride:(NSInteger)srcStride
             width:(NSInteger)width
            height:(NSInteger)height
               dst:(float *)dst {
     return stereo_copy_depth(src, (int)srcStride, (int)width, (int)height, dst) == 0;
+}
+
+@end
+
+// MARK: - 自动标定（搜索在 C++，打分回到平台）
+
+namespace {
+
+/// C 函数指针 → ObjC block 的转换。block 在调用期间一定活着（同步调用），
+/// 所以用 __bridge 就够了，不需要 copy。
+float sv_calibrate_score(void *user, int flip, float dy) {
+    float (^block)(BOOL, float) = (__bridge float (^)(BOOL, float))user;
+    return block(flip != 0, dy);
+}
+
+}  // namespace
+
+// 内部可写：对外只读（头文件里是 readonly）。
+@interface SVCalibration ()
+@property (nonatomic, readwrite) BOOL flipped;
+@property (nonatomic, readwrite) float yOffset;
+@property (nonatomic, readwrite) float score;
+@end
+
+@implementation SVCalibration
+
+@end
+
+@implementation SVStereoCore (Calibration)
+
++ (nullable SVCalibration *)calibrate:(float (^)(BOOL, float))score
+                                flip0:(BOOL)flip0
+                                  dy0:(float)dy0 {
+    if (score == nil) return nil;
+
+    stereo_calibrate_params p{};
+    p.max_disp = 96;      // 打分由平台完成，这两个字段只对 CPU 打分路径有意义
+    p.pixel_step = 4;
+    p.flip0 = flip0 ? 1 : 0;
+    p.dy0 = dy0;
+
+    stereo_calibrate_result r{};
+    if (stereo_calibrate_search(sv_calibrate_score, (__bridge void *)score, &p, &r) != 0) {
+        return nil;
+    }
+    SVCalibration *out = [[SVCalibration alloc] init];
+    out.flipped = r.flip != 0;
+    out.yOffset = r.dy;
+    out.score = r.score;
+    return out;
 }
 
 @end

@@ -24,6 +24,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 分析结果容器（定义在本文件后面）。这里先前置声明，因为 SVStereoCore 的方法要用它。
 @class SVAnalysis;
+@class SVCalibration;
 
 /// 像素字节顺序，与 core/include/stereo/stereo_c_api.h 的 enum stereo_format 一一对应。
 typedef NS_ENUM(NSInteger, SVImageFormat) {
@@ -132,6 +133,15 @@ typedef NS_ENUM(NSInteger, SVImageFormat) {
                   q:(float)q
               value:(float *)value;
 
+/// 自动标定：候选序列 / 细化 / 比较在 C++（core/src/calibrate.cpp），
+/// 每一次打分回到 `score` —— iOS 上就是 Metal 的 rectify + census + cost。
+///
+/// `score` 返回该候选的平均匹配代价（越小越对齐）；返回 INFINITY 表示这次打分失败。
+/// 返回 nil 表示 54 次打分全部失败。
++ (nullable SVCalibration *)calibrate:(float (^)(BOOL flipped, float yOffset))score
+                                flip0:(BOOL)flip0
+                                  dy0:(float)dy0;
+
 /// 连通域分析：降采样成网格 → 4 邻域连通域 → 保留最大的 maxBlobs 个。
 ///
 /// 结果写进 `out`（复用同一个对象就不每帧分配）。返回 NO 表示参数/内存问题。
@@ -146,6 +156,16 @@ typedef NS_ENUM(NSInteger, SVImageFormat) {
             minCells:(NSInteger)minCells
                 into:(SVAnalysis *)out;
 
+@end
+
+/// 自动标定的结果。
+@interface SVCalibration : NSObject
+/// YES = 基线方向反了（外参要取逆）。
+@property (nonatomic, readonly) BOOL flipped;
+/// 行偏移（工作分辨率像素，可亚像素）。
+@property (nonatomic, readonly) float yOffset;
+/// 胜出候选的平均匹配代价（越小越对齐）。
+@property (nonatomic, readonly) float score;
 @end
 
 /// 一个深度面块。字段与 core 的 `stereo_blob` 一一对应（Bridge 里逐字段翻译）。
@@ -215,6 +235,13 @@ typedef struct SVBlobRecord {
               height:(NSInteger)height
                 minZ:(float)minZ
                 maxZ:(float)maxZ;
+
+/// 对 `values[0..count)` 里 **>= 0** 的元素求平均（自动标定读回代价图时用）。
+/// 没有这样的元素时返回 NaN。
+///
+/// 放在这一层是因为它只是"把 GPU 输出归约成标量"，不是算法；
+/// 但它必须在这里，Swift 侧才不用写逐元素循环。
++ (float)meanNonNegative:(const float *)values count:(NSInteger)count;
 
 /// 带跨度 → 紧凑的 float 拷贝（把 MTLBuffer 的行跨度拆掉）。
 + (BOOL)copyDepth:(const float *)src

@@ -74,16 +74,6 @@ enum DisplayOrientation: Int, Sendable, CaseIterable {
 
     var isPortrait: Bool { self == .portrait || self == .portraitUpsideDown }
 
-    /// 反方向：用来把屏幕坐标系的东西转回相机 buffer 坐标系。
-    var inverse: DisplayOrientation {
-        switch self {
-        case .landscapeRight: .landscapeRight
-        case .portrait: .portraitUpsideDown
-        case .landscapeLeft: .landscapeLeft
-        case .portraitUpsideDown: .portrait
-        }
-    }
-
     var key: String {
         switch self {
         case .landscapeRight: "landscape_right"

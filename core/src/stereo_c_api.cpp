@@ -9,6 +9,7 @@
 #include "stereo/stereo_c_api.h"
 
 #include "stereo/analyze.hpp"
+#include "stereo/calibrate.hpp"
 #include "stereo/cloud.hpp"
 #include "stereo/geometry.hpp"
 #include "stereo/rectify.hpp"
@@ -47,6 +48,16 @@ struct stereo_context {
     std::vector<int> a_remap;
     std::vector<unsigned> a_comps;   // 内部 Comp 是 32 字节，这里按 4 字节单元存
     std::vector<float> a_samples;    // 准星分位数采样
+
+    // 自动标定的 scratch（工作分辨率变化时才重分配）
+    int c_w = 0;
+    int c_h = 0;
+    std::vector<uint8_t> c_rect_l;
+    std::vector<uint8_t> c_rect_r;
+    std::vector<float> c_luma_l;
+    std::vector<float> c_luma_r;
+    std::vector<uint64_t> c_census_l;
+    std::vector<uint64_t> c_census_r;
 
     char err[256] = {0};
 };
@@ -497,6 +508,104 @@ int stereo_depth_to_u16_mm(const float *depth, int stride, int width, int height
 
 int stereo_copy_depth(const float *src, int src_stride, int width, int height, float *dst) {
     return stereo::copy_depth(src, src_stride, width, height, dst) ? 0 : -1;
+}
+
+int stereo_calibrate(stereo_context *ctx, const stereo_rectify_input *geometry,
+                     const stereo_image *wide, const stereo_image *ultra,
+                     const stereo_calibrate_params *params, stereo_calibrate_result *out) {
+    if (ctx == nullptr || geometry == nullptr || params == nullptr || out == nullptr) {
+        return -1;
+    }
+    if (!valid_image(wide) || !valid_image(ultra)) return fail(ctx, "stereo_calibrate: bad image");
+
+    stereo::RectifyInput ri;
+    ri.wide = to_intrinsics(geometry->wide);
+    ri.ultra = to_intrinsics(geometry->ultra);
+    ri.extrinsic.R = to_mat3(geometry->R);
+    ri.extrinsic.t = stereo::Vec3{geometry->t[0], geometry->t[1], geometry->t[2]};
+    ri.src_width = geometry->src_width;
+    ri.work_width = geometry->work_width;
+    ri.work_height = geometry->work_height;
+    ri.flip = geometry->flip;
+    ri.dy = geometry->dy;
+
+    const int W = geometry->work_width;
+    const int H = geometry->work_height;
+    if (W <= 0 || H <= 0) return fail(ctx, "stereo_calibrate: bad work size");
+
+    if (W != ctx->c_w || H != ctx->c_h) {
+        const size_t n = static_cast<size_t>(W) * static_cast<size_t>(H);
+        try {
+            ctx->c_rect_l.assign(n * 4, 0);
+            ctx->c_rect_r.assign(n * 4, 0);
+            ctx->c_luma_l.assign(n, 0.0f);
+            ctx->c_luma_r.assign(n, 0.0f);
+            ctx->c_census_l.assign(n, 0);
+            ctx->c_census_r.assign(n, 0);
+        } catch (const std::bad_alloc &) {
+            ctx->c_w = ctx->c_h = 0;
+            return fail(ctx, "stereo_calibrate: out of memory");
+        }
+        ctx->c_w = W;
+        ctx->c_h = H;
+    }
+
+    stereo::ImageView wv;
+    wv.data = wide->data;
+    wv.width = wide->width;
+    wv.height = wide->height;
+    wv.stride = wide->stride;
+    wv.format = wide->format;
+
+    stereo::ImageView uv;
+    uv.data = ultra->data;
+    uv.width = ultra->width;
+    uv.height = ultra->height;
+    uv.stride = ultra->stride;
+    uv.format = ultra->format;
+
+    stereo::CalibrateParams cp;
+    cp.max_disp = params->max_disp;
+    cp.pixel_step = params->pixel_step;
+    cp.flip0 = params->flip0;
+    cp.dy0 = params->dy0;
+
+    stereo::CalibrateScratch sc;
+    sc.rect_l = ctx->c_rect_l.data();
+    sc.rect_r = ctx->c_rect_r.data();
+    sc.luma_l = ctx->c_luma_l.data();
+    sc.luma_r = ctx->c_luma_r.data();
+    sc.census_l = ctx->c_census_l.data();
+    sc.census_r = ctx->c_census_r.data();
+
+    stereo::CalibrateResult res;
+    if (!stereo::calibrate_rectification(ri, wv, uv, cp, &sc, &res)) {
+        return fail(ctx, "stereo_calibrate: search failed");
+    }
+    out->flip = res.flip;
+    out->dy = res.dy;
+    out->score = res.score;
+    out->evaluations = res.evaluations;
+    ctx->err[0] = '\0';
+    return 0;
+}
+
+int stereo_calibrate_search(stereo_score_fn score, void *user,
+                            const stereo_calibrate_params *params,
+                            stereo_calibrate_result *out) {
+    if (score == nullptr || params == nullptr || out == nullptr) return -1;
+    stereo::CalibrateParams cp;
+    cp.max_disp = params->max_disp;
+    cp.pixel_step = params->pixel_step;
+    cp.flip0 = params->flip0;
+    cp.dy0 = params->dy0;
+    stereo::CalibrateResult res;
+    if (!stereo::calibrate_search(score, user, cp, &res)) return -1;
+    out->flip = res.flip;
+    out->dy = res.dy;
+    out->score = res.score;
+    out->evaluations = res.evaluations;
+    return 0;
 }
 
 } /* extern "C" */

@@ -111,3 +111,19 @@ jobs:
           fi
           echo "== $BIN =="
           "$BIN"
+
+      - name: Calibrate test (自动标定搜索)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN=""
+          for c in build/core/calibrate_test                    build/core/Release/calibrate_test.exe                    build/core/Debug/calibrate_test.exe; do
+            if [ -f "$c" ]; then BIN="$c"; break; fi
+          done
+          if [ -z "$BIN" ]; then
+            echo "找不到 calibrate_test"
+            find build/core -maxdepth 3 -type f -name "*calibrate*" | head -20
+            exit 1
+          fi
+          echo "== $BIN =="
+          "$BIN"
