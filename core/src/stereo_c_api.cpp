@@ -8,8 +8,10 @@
 
 #include "stereo/stereo_c_api.h"
 
+#include "stereo/analyze.hpp"
 #include "stereo/geometry.hpp"
 #include "stereo/rectify.hpp"
+#include "stereo/sample.hpp"
 #include "stereo/sgm.hpp"
 
 #include <cstdio>
@@ -33,6 +35,17 @@ struct stereo_context {
     std::vector<uint16_t> sum;
     std::vector<float> disp_r;
     std::vector<float> disp_l;
+
+    // 分位数采样 / 连通域分析的 scratch（只在尺寸变化时重新分配）
+    std::vector<float> sample_scratch;
+    int a_gw = 0;
+    int a_gh = 0;
+    std::vector<float> a_grid;
+    std::vector<int> a_labels;
+    std::vector<int> a_stack;
+    std::vector<int> a_remap;
+    std::vector<unsigned> a_comps;   // 内部 Comp 是 32 字节，这里按 4 字节单元存
+    std::vector<float> a_samples;    // 准星分位数采样
 
     char err[256] = {0};
 };
@@ -342,6 +355,110 @@ int stereo_unrectify_depth(const float *src, int src_stride, int src_width, int 
                                    dst_width, dst_height, dst_stride)
                ? 0
                : -1;
+}
+
+int stereo_analyze_grid(int width, int height, int *grid_width, int *grid_height) {
+    if (grid_width == nullptr || grid_height == nullptr) return -1;
+    if (width <= 0 || height <= 0) return -1;
+    stereo::analyze_grid_size(width, height, grid_width, grid_height);
+    return 0;
+}
+
+int stereo_sample_depth(stereo_context *ctx, const float *depth, int depth_stride, int width,
+                        int height, float x0, float y0, float x1, float y1, float q,
+                        float *out_value) {
+    if (ctx == nullptr || depth == nullptr || out_value == nullptr) return -1;
+    if (width <= 0 || height <= 0) return -1;
+    if (!(x1 > x0) || !(y1 > y0)) return -1;
+
+    if (static_cast<int>(ctx->sample_scratch.size()) < stereo::kSampleScratchFloats) {
+        ctx->sample_scratch.resize(static_cast<size_t>(stereo::kSampleScratchFloats));
+    }
+    const bool ok = stereo::sample_quantile(depth, depth_stride, width, height, x0, y0, x1, y1, q,
+                                            ctx->sample_scratch.data(),
+                                            static_cast<int>(ctx->sample_scratch.size()), out_value);
+    // 区分"有效样本不足"（1）和"参数非法"（-1）：前者是正常的 UI 状态。
+    return ok ? 0 : 1;
+}
+
+int stereo_analyze(stereo_context *ctx, const float *depth, int depth_stride, int width, int height,
+                   const stereo_analyze_params *params, const float center_rect[4],
+                   float center_q, stereo_blob *blobs, int blobs_capacity, unsigned char *labels,
+                   stereo_analysis *out) {
+    if (ctx == nullptr || depth == nullptr || params == nullptr || out == nullptr) return -1;
+    if (blobs == nullptr || blobs_capacity <= 0) return -1;
+    if (width <= 0 || height <= 0) return -1;
+
+    int gw = 0, gh = 0;
+    stereo::analyze_grid_size(width, height, &gw, &gh);
+    if (gw <= 0 || gh <= 0) return fail(ctx, "stereo_analyze: bad size");
+
+    // 缓冲按网格尺寸复用
+    if (gw != ctx->a_gw || gh != ctx->a_gh) {
+        const size_t n = static_cast<size_t>(gw) * static_cast<size_t>(gh);
+        try {
+            ctx->a_grid.assign(n, 0.0f);
+            ctx->a_labels.assign(n, 0);
+            ctx->a_stack.assign(n, 0);
+            ctx->a_remap.assign(n + 1, 0);
+            const size_t comps_bytes = stereo::analyze_comps_bytes(gw, gh);
+            ctx->a_comps.assign(comps_bytes / sizeof(unsigned) + 1, 0u);
+        } catch (const std::bad_alloc &) {
+            ctx->a_gw = ctx->a_gh = 0;
+            return fail(ctx, "stereo_analyze: out of memory");
+        }
+        ctx->a_gw = gw;
+        ctx->a_gh = gh;
+    }
+
+    stereo::AnalyzeParams ap;
+    ap.fx = params->fx;
+    ap.fy = params->fy;
+    ap.cx = params->cx;
+    ap.cy = params->cy;
+    ap.max_blobs = params->max_blobs;
+    ap.min_cells = params->min_cells;
+
+    stereo::AnalyzeScratch sc;
+    sc.grid = ctx->a_grid.data();
+    sc.labels = ctx->a_labels.data();
+    sc.stack = ctx->a_stack.data();
+    sc.remap = ctx->a_remap.data();
+    sc.comps = ctx->a_comps.data();
+    sc.comps_bytes = ctx->a_comps.size() * sizeof(unsigned);
+    if (static_cast<int>(ctx->a_samples.size()) < stereo::kSampleScratchFloats) {
+        try {
+            ctx->a_samples.assign(static_cast<size_t>(stereo::kSampleScratchFloats), 0.0f);
+        } catch (const std::bad_alloc &) {
+            return fail(ctx, "stereo_analyze: out of memory");
+        }
+    }
+    sc.samples = ctx->a_samples.data();
+
+    // POD 翻译：stereo_blob 与 stereo::BlobRecord 布局一致（字段同名同序），
+    // 但还是逐个字段拷，不靠"恰好对齐"过日子。
+    std::vector<stereo::BlobRecord> recs(static_cast<size_t>(blobs_capacity));
+    stereo::AnalyzeResult res;
+    if (!stereo::analyze_depth(depth, depth_stride, width, height, ap, center_rect, center_q,
+                               recs.data(), blobs_capacity, labels, &sc, &res)) {
+        return fail(ctx, "stereo_analyze: bad arguments or buffer");
+    }
+    for (int i = 0; i < res.blob_count; ++i) {
+        const stereo::BlobRecord &r = recs[static_cast<size_t>(i)];
+        blobs[i].identifier = r.identifier;
+        blobs[i].cells = r.cells;
+        blobs[i].distance = r.distance;
+        blobs[i].x = r.x;
+        blobs[i].width = r.width;
+        for (int k = 0; k < 4; ++k) blobs[i].rect[k] = r.rect[k];
+    }
+    out->blob_count = res.blob_count;
+    out->grid_width = res.grid_width;
+    out->grid_height = res.grid_height;
+    out->center = res.center;
+    out->has_center = res.has_center ? 1 : 0;
+    ctx->err[0] = '\0';
+    return 0;
 }
 
 } /* extern "C" */

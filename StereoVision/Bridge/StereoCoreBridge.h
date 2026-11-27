@@ -116,6 +116,62 @@ typedef NS_ENUM(NSInteger, SVImageFormat) {
                dstWidth:(NSInteger)dstWidth
               dstHeight:(NSInteger)dstHeight;
 
+// ---------------------------------------------------------------------------
+// 深度图查询与分析（准星读数 / 点选测距 / 3D segmentation）
+// ---------------------------------------------------------------------------
+
+/// 在归一化矩形里取 q 分位数。返回 NO 表示有效深度不足（UI 应显示 "—"）。
+- (BOOL)sampleDepth:(const float *)depth
+             stride:(NSInteger)stride
+              width:(NSInteger)width
+             height:(NSInteger)height
+               rect:(simd_float4)rect
+                  q:(float)q
+              value:(float *)value;
+
+/// 连通域分析：降采样成网格 → 4 邻域连通域 → 保留最大的 maxBlobs 个。
+///
+/// 结果写进 `out`（复用同一个对象就不每帧分配）。返回 NO 表示参数/内存问题。
+- (BOOL)analyzeDepth:(const float *)depth
+              stride:(NSInteger)stride
+               width:(NSInteger)width
+              height:(NSInteger)height
+          intrinsics:(simd_float4)intrinsics
+          centerRect:(simd_float4)centerRect
+             centerQ:(float)centerQ
+            maxBlobs:(NSInteger)maxBlobs
+            minCells:(NSInteger)minCells
+                into:(SVAnalysis *)out;
+
+@end
+
+/// 一个深度面块。字段与 core 的 `stereo_blob` 一一对应（Bridge 里逐字段翻译）。
+typedef struct SVBlobRecord {
+    NSInteger identifier;   ///< 1..blobCount，按格子数从大到小
+    NSInteger cells;        ///< 占多少网格格子
+    float distance;         ///< 平均深度（米）
+    float x;                ///< 面块中心在相机坐标系里的 X（米）
+    float width;            ///< 物理宽度（米）
+    float rectX, rectY, rectW, rectH;   ///< 归一化包围盒
+} SVBlobRecord;
+
+/// 分析结果的容器（由一个可复用的实例持有，见 `analyzeDepth:...into:`）。
+///
+/// `blobs` / `labels` 返回的是**借用指针**，活到下一次 `analyzeDepth:...into:`
+/// 或对象释放为止。这样每帧不产生数组分配 —— 调用方在这一帧内读完就行。
+@interface SVAnalysis : NSObject
+
+@property (nonatomic, readonly) NSInteger blobCount;
+@property (nonatomic, readonly) NSInteger gridWidth;
+@property (nonatomic, readonly) NSInteger gridHeight;
+@property (nonatomic, readonly) BOOL hasCenter;
+@property (nonatomic, readonly) float center;
+
+/// `SVBlobRecord[blobCount]`
+- (const void *)blobs;
+/// `gridWidth * gridHeight` 个字节；0 = 未保留（含被 minCells 过滤掉的块）
+- (const void *)labels;
+
 @end
 
 // ---------------------------------------------------------------------------

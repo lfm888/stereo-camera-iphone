@@ -252,7 +252,8 @@ final class Pipeline: @unchecked Sendable {
         let now = CACurrentMediaTime()
         stamps.append(now)
         stamps.removeAll { now - $0 > 1 }
-        let a = analyzer.analyze(f)
+        // 深度连通域分析在 C++（core/src/analyze.cpp），这里只拿结果。
+        let a = analyzer.analyze(f, using: engine.core)
         let (name, stages) = Self.diagnostics(kind, f)
         publish?(FrameReport(analysis: a, fps: Double(stamps.count), gpuMs: f.gpuMs, cpuMs: f.cpuMs,
                              matcherName: name, stages: stages,
@@ -313,6 +314,10 @@ final class AppModel {
 
     @ObservationIgnored let pipeline: Pipeline
     @ObservationIgnored let renderer: Renderer
+    /// 主线程专用的 C++ context：点选测距在主线程跑，而 pipeline 的 context 在相机数据队列上跑。
+    /// 两个分开是为了不并发访问同一个 stereo_context（它不是线程安全的）。
+    @ObservationIgnored private let queryCore = SVStereoCore(maxDisparity: 64, p1: 8, p2: 96,
+                                                           uniqueness: 0.1, lrCheck: true)
     @ObservationIgnored private var orientationObservers: [NSObjectProtocol] = []
     let capture = Capture()
     @ObservationIgnored private let camera = CameraController()
@@ -496,9 +501,18 @@ final class AppModel {
     }
 
     private func sampleTap() -> Float? {
-        guard let tap, let f = pipeline.store.latest else { return nil }
+        guard let tap, let f = pipeline.store.latest, let core = queryCore else { return nil }
         let p = orientation.buffer(tap)          // 屏幕坐标 -> 相机 buffer 坐标（深度图在 buffer 坐标系里）
-        return f.sample(CGRect(x: p.x - 0.012, y: p.y - 0.02, width: 0.024, height: 0.04), q: 0.5)
+        var v: Float = 0
+        let ok = core.sampleDepth(f.depthPointer,
+                                  stride: f.depthStride,
+                                  width: f.width,
+                                  height: f.height,
+                                  rect: SIMD4(Float(p.x - 0.012), Float(p.y - 0.02),
+                                              Float(p.x + 0.012), Float(p.y + 0.02)),
+                                  q: 0.5,
+                                  value: &v)
+        return ok ? v : nil
     }
 
     private func push(_ change: (inout PipelineSettings) -> Void) {

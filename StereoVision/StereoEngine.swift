@@ -59,10 +59,14 @@ final class StereoFrame: @unchecked Sendable {
         self.retained = retained
     }
 
-    func z(_ x: Int, _ y: Int) -> Float {
-        buffer.contents().assumingMemoryBound(to: Float.self)[y * rowStride + x]
+    /// 深度图在 CPU 侧的指针与**像素**行跨度（指向共享 MTLBuffer，C++ 直接读写）。
+    /// 点选测距、连通域分析都走这两个。
+    var depthPointer: UnsafeMutablePointer<Float> {
+        buffer.contents().assumingMemoryBound(to: Float.self)
     }
+    var depthStride: Int { rowStride }
 
+    /// 按行跨度拍平成紧凑数组（导出 / 写 PNG 用）。
     func depthCopy() -> [Float] {
         var out = [Float](repeating: 0, count: width * height)
         for y in 0..<height {
@@ -74,22 +78,6 @@ final class StereoFrame: @unchecked Sendable {
 
     func row(_ y: Int) -> UnsafePointer<Float> {
         UnsafePointer(buffer.contents().assumingMemoryBound(to: Float.self) + y * rowStride)
-    }
-
-    func sample(_ r: CGRect, q: Float) -> Float? {
-        let x0 = max(0, Int(r.minX * CGFloat(width))), x1 = min(width, Int(r.maxX * CGFloat(width)))
-        let y0 = max(0, Int(r.minY * CGFloat(height))), y1 = min(height, Int(r.maxY * CGFloat(height)))
-        guard x1 > x0, y1 > y0 else { return nil }
-        let step = max(1, Int(sqrt(Double((x1 - x0) * (y1 - y0)) / 400)))
-        var v: [Float] = []
-        v.reserveCapacity(500)
-        for y in stride(from: y0, to: y1, by: step) {
-            let p = row(y)
-            for x in stride(from: x0, to: x1, by: step) where p[x] > 0 { v.append(p[x]) }
-        }
-        guard v.count >= 6 else { return nil }
-        v.sort()
-        return v[Int(Float(v.count - 1) * q)]
     }
 }
 
@@ -132,9 +120,10 @@ final class StereoEngine: @unchecked Sendable {
     private var rig: CameraRig?
     var hasExtrinsics: Bool { rig?.hasExtrinsics ?? false }
 
-    /// C++ 后端（第三层 → 第二层 → C 接口 → core/src/sgm.cpp）。
-    /// 只在相机数据队列上访问，所以不需要加锁。
-    private lazy var cpuCore: SVStereoCore? = SVStereoCore(maxDisparity: 64, p1: 8, p2: 96, uniqueness: 0.1, lrCheck: true)
+    /// C++ 核心上下文：CPU 匹配、视差→深度、深度回转、点选测距、连通域分析共用它。
+    /// 不是 lazy —— 即使走 Metal 路径，准星读数与面块分析也要用它。
+    /// 为 nil 表示 stereo_create 失败（只会因为内存不足），此时只剩 Metal 路径能跑。
+    let core: SVStereoCore?
 
     private final class Slot {
         let right, censusL, censusR, disp, cost, depthRolled: MTLTexture
@@ -170,6 +159,8 @@ final class StereoEngine: @unchecked Sendable {
 
     init(device: MTLDevice) {
         self.device = device
+        // 第 3/4 步的 C++ context（兼做点选测距与连通域分析的公用上下文）。
+        core = SVStereoCore(maxDisparity: 64, p1: 8, p2: 96, uniqueness: 0.1, lrCheck: true)
         queue = device.makeCommandQueue()!
         let lib = device.makeDefaultLibrary()!
         func pso(_ n: String) -> MTLComputePipelineState { try! device.makeComputePipelineState(function: lib.makeFunction(name: n)!) }
@@ -339,7 +330,7 @@ final class StereoEngine: @unchecked Sendable {
     ///   Census/SGM/WTA      CPU（core/src/sgm.cpp）
     ///   toDepth/unrectify   GPU（沿用 Metal kernel）
     func stereoCPU(_ wide: CMSampleBuffer, _ ultra: CMSampleBuffer, _ s: PipelineSettings) -> StereoFrame? {
-        guard let inp = inputs(wide, ultra), let core = cpuCore else { return nil }
+        guard let inp = inputs(wide, ultra), let core else { return nil }
         guard core.configure(maxDisparity: s.maxDisparity, p1: s.p1, p2: s.p2,
                              uniqueness: s.uniqueness, lrCheck: s.lrCheck) else { return nil }
 

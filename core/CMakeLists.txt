@@ -18,6 +18,8 @@ add_library(stereo_core STATIC
     src/sgm.cpp
     src/geometry.cpp
     src/rectify.cpp
+    src/sample.cpp
+    src/analyze.cpp
     src/stereo_c_api.cpp
 )
 target_include_directories(stereo_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -42,8 +44,13 @@ target_link_libraries(golden_test PRIVATE stereo_core)
 add_executable(geometry_test tests/geometry_test.cpp)
 target_link_libraries(geometry_test PRIVATE stereo_core)
 
+# 深度查询/分析：用独立写的朴素参考（暴力排序、逐块重建）对拍。
+add_executable(analyze_test tests/analyze_test.cpp)
+target_link_libraries(analyze_test PRIVATE stereo_core)
+
 # 让 `ctest` / `cmake --build . --target golden_test` 之后能直接跑对拍
 enable_testing()
 add_test(NAME golden COMMAND golden_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden)
 add_test(NAME c_api COMMAND c_api_smoke)
 add_test(NAME geometry COMMAND geometry_test)
+add_test(NAME analyze COMMAND analyze_test)

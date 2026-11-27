@@ -48,6 +48,17 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
 
 }  // namespace
 
+// 内部写入口：只在 Bridge 里用，不暴露给 Swift（不写在公开头文件里）。
+@interface SVAnalysis ()
+@property (nonatomic, readwrite) NSInteger blobCount;
+@property (nonatomic, readwrite) NSInteger gridWidth;
+@property (nonatomic, readwrite) NSInteger gridHeight;
+@property (nonatomic, readwrite) BOOL hasCenter;
+@property (nonatomic, readwrite) float center;
+- (void)fillFromCBlobs:(const stereo_blob *)src count:(NSInteger)count;
+- (void)fillLabels:(const uint8_t *)bytes count:(NSInteger)count;
+@end
+
 @implementation SVStereoCore {
     stereo_context *_ctx;  // C++ 侧的不透明句柄，唯一需要手工管理生命周期的东西
 }
@@ -202,6 +213,81 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
                                   (int)dstStride, (int)dstWidth, (int)dstHeight) == 0;
 }
 
+
+
+- (BOOL)sampleDepth:(const float *)depth
+             stride:(NSInteger)stride
+              width:(NSInteger)width
+             height:(NSInteger)height
+               rect:(simd_float4)rect
+                  q:(float)q
+              value:(float *)value {
+    if (_ctx == NULL) {
+        _lastError = @"context 已经释放";
+        return NO;
+    }
+    // 返回 1 = "有效样本不足"（正常的 UI 状态，不算错误），所以只看 < 0。
+    const int rc = stereo_sample_depth(_ctx, depth, (int)stride, (int)width, (int)height, rect.x,
+                                       rect.y, rect.z, rect.w, q, value);
+    if (rc < 0) {
+        _lastError = [NSString stringWithUTF8String:stereo_last_error(_ctx)];
+        return NO;
+    }
+    return rc == 0;
+}
+
+- (BOOL)analyzeDepth:(const float *)depth
+              stride:(NSInteger)stride
+               width:(NSInteger)width
+              height:(NSInteger)height
+          intrinsics:(simd_float4)intrinsics
+          centerRect:(simd_float4)centerRect
+             centerQ:(float)centerQ
+            maxBlobs:(NSInteger)maxBlobs
+            minCells:(NSInteger)minCells
+                into:(SVAnalysis *)out {
+    if (_ctx == NULL) {
+        _lastError = @"context 已经释放";
+        return NO;
+    }
+    if (out == nil || maxBlobs <= 0) return NO;
+
+    stereo_analyze_params p{};
+    p.fx = intrinsics.x;
+    p.fy = intrinsics.y;
+    p.cx = intrinsics.z;
+    p.cy = intrinsics.w;
+    p.max_blobs = (int)maxBlobs;
+    p.min_cells = (int)minCells;
+
+    const float center[4] = {centerRect.x, centerRect.y, centerRect.z, centerRect.w};
+
+    // 先问网格尺寸，再准备 labels / blobs 缓冲（都放在这个方法的临时区，量很小）。
+    int gw = 0, gh = 0;
+    if (stereo_analyze_grid((int)width, (int)height, &gw, &gh) != 0 || gw <= 0 || gh <= 0) {
+        return NO;
+    }
+    std::vector<uint8_t> label_buf(static_cast<size_t>(gw) * static_cast<size_t>(gh));
+    std::vector<stereo_blob> c_blobs(static_cast<size_t>(maxBlobs));
+
+    stereo_analysis res{};
+    if (stereo_analyze(_ctx, depth, (int)stride, (int)width, (int)height, &p, center, centerQ,
+                       c_blobs.data(), (int)maxBlobs, label_buf.data(), &res) != 0) {
+        _lastError = [NSString stringWithUTF8String:stereo_last_error(_ctx)];
+        return NO;
+    }
+
+    out.blobCount = res.blob_count;
+    out.gridWidth = res.grid_width;
+    out.gridHeight = res.grid_height;
+    out.hasCenter = res.has_center != 0;
+    out.center = res.center;
+    [out fillFromCBlobs:c_blobs.data() count:res.blob_count];
+    [out fillLabels:label_buf.data() count:(NSInteger)label_buf.size()];
+    _lastError = @"";
+    return YES;
+}
+
 @end
 
 // MARK: - 第 2 步：极线矫正
@@ -259,3 +345,41 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
 }
 
 @end
+
+// MARK: - 深度图查询与分析
+
+@implementation SVAnalysis {
+    std::vector<SVBlobRecord> _blobs;
+    std::vector<uint8_t> _labels;
+}
+
+- (const void *)blobs { return _blobs.data(); }
+- (const void *)labels { return _labels.data(); }
+
+/// 只在本文件内用：把 C 的面块数组翻译成 ObjC 侧的结构（字段逐个拷，不靠"恰好对齐"）。
+- (void)fillFromCBlobs:(const stereo_blob *)src count:(NSInteger)count {
+    _blobs.resize(static_cast<size_t>(count));
+    for (NSInteger i = 0; i < count; ++i) {
+        SVBlobRecord &d = _blobs[static_cast<size_t>(i)];
+        d.identifier = src[i].identifier;
+        d.cells = src[i].cells;
+        d.distance = src[i].distance;
+        d.x = src[i].x;
+        d.width = src[i].width;
+        d.rectX = src[i].rect[0];
+        d.rectY = src[i].rect[1];
+        d.rectW = src[i].rect[2];
+        d.rectH = src[i].rect[3];
+    }
+}
+
+- (void)fillLabels:(const uint8_t *)bytes count:(NSInteger)count {
+    if (bytes == nullptr || count <= 0) {
+        _labels.clear();
+        return;
+    }
+    _labels.assign(bytes, bytes + count);
+}
+
+@end
+
