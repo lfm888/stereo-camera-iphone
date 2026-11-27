@@ -92,7 +92,7 @@ Shaders.metal                 GPU kernel（iOS 的快路径）
 
 这一层只做三件事：指针与生命周期、simd ↔ `float[9]`、POD ↔ ObjC 对象。**不放算法**。
 
-## 3. `StereoVision/` — Swift 前端（2864 行）
+## 3. `StereoVision/` — Swift 前端（3757 行，其中 `Engine/` 1373 行）
 
 ### 3.1 界面（5 个文件，只读快照 + intent）
 
@@ -109,9 +109,9 @@ Shaders.metal                 GPU kernel（iOS 的快路径）
 | 文件 | 行 | 职责 | 关键成员 |
 |---|---|---|---|
 | `Contracts.swift` | 308 | 共享词汇 + 界面契约 + 诊断值类型 | `ViewMode`/`Matcher`/`DisplayOrientation`、`SettingsDraft`（含 `subscript(key:)`）、`DeviceInfo`/`CaptureUIState`、`CaptureIntents`/`SettingsIntents`、`GpuReport`/`DiagnosticsSnapshot` |
-| `Pipeline.swift` | 154 | 每帧后台管线与报告类型 | `PipelineSettings`、`PipelineKind`、`StageTimings`、`FrameReport`、`FrameStore`、`Pipeline`（`stereo`/`depthData`/`timings(of:)`/`finish`） |
+| `Pipeline.swift` | 155 | 每帧后台管线与报告类型 | `PipelineSettings`、`PipelineKind`、`StageTimings`、`FrameReport`、`FrameStore`、`Pipeline`（`stereo`/`depthData`/`timings(of:)`/`finish`） |
 | `AppModel.swift` | 369 | 状态聚合 + 接线 + 意图实现 | `start`/`setSource`/`calibrate`/`measure`/`captureTarget`/`metadata`/`outputSize` + 只读视图 `ui`/`diagnostics`/`draft`/`device` |
-| `StereoEngine.swift` | 237 | **唯一流程编排者**：输入 → 几何 → 矫正 → 匹配 → 深度 → `StereoFrame` | `processStereoFrame`、`calibrate`、`depthData`、`configure`；不再持有 PSO/纹理/C++ 指针细节 |
+| `Engine/` | 1373 | 双目流程编排 + 可替换的阶段后端（文件清单见 §3.2.1） | `StereoEngine`、`StereoMode`、各阶段 backend |
 | `CameraController.swift` | 213 | AVFoundation 会话：双摄/系统深度、format 选择、同步输出 | `start`/`stop`、`makeStereo`/`makeDepth`、`dataOutputSynchronizer` |
 | `Calibration.swift` | 157 | **第 1 步**：只向系统要参数，不做几何 | `CalibrationSource.intrinsics(of:fov:size:)`、`.calibration(of:)`、`.extrinsics(from:to:)`、`.rig(wide:ultra:)`、`.depthIntrinsics` |
 | `Analyzer.swift` | 90 | C++ 分析结果的薄适配层（C 结构 → `CGRect`/数组） | `Blob`/`Analysis`/`Analyzer.analyze(_:using:)` |
@@ -138,7 +138,7 @@ Shaders.metal                 GPU kernel（iOS 的快路径）
 | `Readback/CPUImageReadback.swift` | 77 | 显式像素读回适配：锁 buffer + `getBytes` + 视差缓冲 | `CPUImageReadback` |
 | `Depth/DepthBackend.swift` | 27 | 深度阶段窄接口（只有 Metal 版有 encoder 形状） | `MetalDepthBackend` |
 | `Depth/MetalDepthProcessor.swift` | 39 | `toDepth` → `unrectifyDepth` | `MetalDepthProcessor` |
-| `Depth/CppDepthProcessor.swift` | 47 | C++ `depth(fromDisparity:)` + `unrectifyDepth`（直接写共享 buffer） | `CppDepthProcessor` |
+| `Depth/CppDepthProcessor.swift` | 48 | C++ `depth(fromDisparity:)` + `unrectifyDepth`（直接写共享 buffer） | `CppDepthProcessor` |
 | `Depth/SystemDepthProcessor.swift` | 55 | 系统深度（AVDepthData）→ `filterDepth`，**不是** SGM 后端 | `SystemDepthProcessor` |
 | `Calibration/StereoCalibrator.swift` | 83 | 自动标定：C++ 候选搜索 + GPU 打分（slots[0]） | `StereoCalibrator` |
 | `Metal/MetalContext.swift` | 40 | device / command queue / 纹理缓存 | `MetalContext` |
@@ -296,9 +296,9 @@ BGRA 双帧 ─GPU rectify→ 640×360 左右图 ─Metal SGM→ 视差 ─toDep
 | 7 | `core/tests/` 2351 行 | 不是运行时代码，但它是"改 C++ 不出错"的唯一保障（**iOS 侧没有任何测试**） | 删测试 = 放弃回归保护 |
 | 8 | `Renderer` 的矩阵工具 | `perspective`/`translate`/`rotateX/Y/Z`（~25 行）只服务点云视图 | 值得留 |
 | 9 | `tools/` 下的脚本 | `sgm_ref.py`+`gen_golden.py` 是金标准的来源（有用）；`viewer.html` / `make_demo_export.py` 用途不明 | 后两个确认没人用可删 |
-| 10 | 文档 | `test.md` 61 KB（过程记录）、`FAQ.md` 18 KB、本文件 | 历史过程文档，按需留 |
+| 10 | 文档 | `test.md` 981 行（过程记录）、`FAQ.md` 438 行、`ARCHITECTURE.md`、`docs/engine-backend-{baseline,refactor}.md`；已删除无引用的 24 MB 演示素材（`demo.gif` / `demo.mp4` / `get_gif.py` / `self-logo.png`） | 过程文档按需留；两份 engine 文档是这次后端拆分的唯一说明 |
 
-**已核实"无引用"的东西**：无。之前清掉的 `DisplayOrientation.inverse`、`CameraCalibration.role/referenceSize`、`CameraRole`、`runCoreSelfTest`、`StereoCore` target 都已不在。
+**已核实"无引用"并已删除的东西**：`docs/demo.gif`、`docs/demo.mp4`、`docs/get_gif.py`、`docs/self-logo.png`（旧 README 的演示素材，删前确认 md / 代码里零引用，共 24 MB）；本地构建残留（`build/gifwork`、`build/artifacts`、`build/core-ci` 等，已忽略不入库）。代码侧之前清掉的 `DisplayOrientation.inverse`、`CameraCalibration.role/referenceSize`、`CameraRole`、`runCoreSelfTest`、`StereoCore` target 都已不在。
 
 **检查用的命令**（评审时可以自己跑）：
 
@@ -318,3 +318,27 @@ cd build/core && ctest -C Release
 > 工程文件由 `project.yml` 在 CI 里生成（`xcodegen generate`），`.gitignore` 已忽略
 > `StereoVision.xcodeproj/`；`scripts/check_xcodeproj_sources.sh` 会在构建前确认
 > "仓库里的源文件"与"工程里参与编译的文件"一致，漏一个就当场失败。
+
+## 7. 构建、产物与文档
+
+| 目标 | 在哪跑 | 怎么跑 |
+|---|---|---|
+| C++ 对拍 + 几何/分析/标定测试（7 个套件） | 本机即可（Windows/Linux/macOS，零第三方依赖） | `cmake -S core -B build/core -DCMAKE_BUILD_TYPE=Release && cmake --build build/core --config Release && cd build/core && ctest -C Release` |
+| 未签名 IPA | GitHub Actions 的 macOS runner（`.github/workflows/ipa.yml`；push `main`/`test` 或手动 dispatch） | CI：`xcodegen generate` → `scripts/check_xcodeproj_sources.sh` → `xcodebuild`（`CODE_SIGNING_ALLOWED=NO`）→ 打成 `Payload/` zip |
+| 取回 IPA | 本地（需要 GitHub token，脚本会先问 `git credential`） | `./scripts/fetch_ipa.sh` → `build/StereoVision-unsigned.ipa` |
+| 工程文件 | CI / macOS 本地 | `xcodegen generate --spec project.yml`（`.xcodeproj` 不入库） |
+
+Windows 上没有 Swift/Xcode 工具链：本地只能跑 C++ 测试和语法级检查；Swift 编译与真机回归
+必须依赖 macOS runner / 真机（回归清单见 `docs/engine-backend-refactor.md` §6）。
+
+| 文档 | 用途 |
+|---|---|
+| `ARCHITECTURE.md` | 本页：分层、文件职责、调用链、评审候选 |
+| `FAQ.md` | 为什么这样分层、算法分工、常见疑问 |
+| `docs/engine-backend-baseline.md` | 后端拆分**前**的调用关系、线程、资源生命周期、计时口径（对照基线） |
+| `docs/engine-backend-refactor.md` | 拆分**后**的迁移映射、等价性说明、真机回归清单 |
+| `STEREO_ENGINE_BACKEND_REFACTOR_PLAN.md`（仓库根） | 这次改造的执行方案（已实施） |
+| `test.md` | 历史过程记录（按需留） |
+| `tools/README.md` | Python 孪生实现、金标准生成、viewer |
+
+App 运行时文件见 §3（`Engine/` 细分见 §3.2.1），C++ 见 §1，桥接见 §2。
