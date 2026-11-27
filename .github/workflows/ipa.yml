@@ -10,6 +10,8 @@ on:
       - "core/**"
       - "Config/**"
       - "project.yml"
+      # 校验脚本参与构建（scripts/check_xcodeproj_sources.sh），改了它必须重跑
+      - "scripts/**"
 
 # 工程文件**由 CI 从 project.yml 生成**（不依赖仓库里提交的 .xcodeproj）：
 #   1) xcodegen generate --spec project.yml
