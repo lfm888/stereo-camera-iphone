@@ -20,6 +20,7 @@ add_library(stereo_core STATIC
     src/rectify.cpp
     src/sample.cpp
     src/analyze.cpp
+    src/cloud.cpp
     src/stereo_c_api.cpp
 )
 target_include_directories(stereo_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -48,9 +49,14 @@ target_link_libraries(geometry_test PRIVATE stereo_core)
 add_executable(analyze_test tests/analyze_test.cpp)
 target_link_libraries(analyze_test PRIVATE stereo_core)
 
+# 导出用的像素运算：点云 PLY / 深度裁剪 / 打包 / 拷贝。
+add_executable(cloud_test tests/cloud_test.cpp)
+target_link_libraries(cloud_test PRIVATE stereo_core)
+
 # 让 `ctest` / `cmake --build . --target golden_test` 之后能直接跑对拍
 enable_testing()
 add_test(NAME golden COMMAND golden_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden)
 add_test(NAME c_api COMMAND c_api_smoke)
 add_test(NAME geometry COMMAND geometry_test)
 add_test(NAME analyze COMMAND analyze_test)
+add_test(NAME cloud COMMAND cloud_test)

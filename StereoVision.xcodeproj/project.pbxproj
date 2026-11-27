@@ -18,6 +18,7 @@
 		C0DE0002000000000000B00B /* rectify.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0002000000000000F00B /* rectify.cpp */; };
 		C0DE0002000000000000B00E /* sample.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0002000000000000F00E /* sample.cpp */; };
 		C0DE0002000000000000B00F /* analyze.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0002000000000000F00F /* analyze.cpp */; };
+		C0DE0002000000000000B014 /* cloud.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0DE0002000000000000F014 /* cloud.cpp */; };
 		0A8885C208F8AF47A1DEF51B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DD47C900CDA69F349F2E7F05 /* Assets.xcassets */; };
 		25121C3183A3A939B562FD37 /* StereoEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBEB6373DDF5AFD89798702 /* StereoEngine.swift */; };
 		303596F04684BEEC1FD9B97E /* OverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DA425104A6DE48AF50AE289 /* OverlayView.swift */; };
@@ -50,6 +51,8 @@
 		C0DE0002000000000000F011 /* analyze.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "core/include/stereo/analyze.hpp"; sourceTree = "<group>"; };
 		C0DE0002000000000000F012 /* CaptureScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureScreen.swift; sourceTree = "<group>"; };
 		C0DE0002000000000000F013 /* SettingsScreen.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsScreen.swift; sourceTree = "<group>"; };
+		C0DE0002000000000000F014 /* cloud.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = "core/src/cloud.cpp"; sourceTree = "<group>"; };
+		C0DE0002000000000000F015 /* cloud.hpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "core/include/stereo/cloud.hpp"; sourceTree = "<group>"; };
 		1921C3786C3FB672A67C7E9B /* Capture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Capture.swift; sourceTree = "<group>"; };
 		2DA425104A6DE48AF50AE289 /* OverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OverlayView.swift; sourceTree = "<group>"; };
 		6E909856B28ECAC981F8F9C1 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
@@ -104,12 +107,14 @@
 				C0DE0002000000000000F00B /* rectify.cpp */,
 				C0DE0002000000000000F00E /* sample.cpp */,
 				C0DE0002000000000000F00F /* analyze.cpp */,
+				C0DE0002000000000000F014 /* cloud.cpp */,
 				C0DE0001000000000000F003 /* sgm.hpp */,
 				C0DE0001000000000000F004 /* stereo_c_api.h */,
 				C0DE0002000000000000F00C /* geometry.hpp */,
 				C0DE0002000000000000F00D /* rectify.hpp */,
 				C0DE0002000000000000F010 /* sample.hpp */,
 				C0DE0002000000000000F011 /* analyze.hpp */,
+				C0DE0002000000000000F015 /* cloud.hpp */,
 				C0DE0001000000000000F005 /* StereoCoreBridge.h */,
 				C0DE0001000000000000F006 /* StereoCoreBridge.mm */,
 				C0DE0001000000000000F007 /* StereoVision-Bridging-Header.h */,
@@ -204,6 +209,7 @@
 			C0DE0002000000000000B00B /* rectify.cpp in Sources */,
 			C0DE0002000000000000B00E /* sample.cpp in Sources */,
 			C0DE0002000000000000B00F /* analyze.cpp in Sources */,
+			C0DE0002000000000000B014 /* cloud.cpp in Sources */,
 			C0DE0001000000000000B003 /* StereoCoreBridge.mm in Sources */,
 				C00FAEBD9221E735877A6B2B /* Analyzer.swift in Sources */,
 				C0DE0002000000000000B009 /* Calibration.swift in Sources */,

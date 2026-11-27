@@ -89,7 +89,7 @@ final class Renderer: NSObject, MTKViewDelegate {
               let cb = queue.makeCommandBuffer() else { return }
         let hasLabels = uploadLabels(model.analysis)
         encode(cb, pass, frame, model, size: view.drawableSize, hasLabels: hasLabels)
-        if let (pb, done) = model.capture.target(), let (offscreen, cv) = offscreenPass(pb) {
+        if let (pb, done) = model.captureTarget(), let (offscreen, cv) = offscreenPass(pb) {
             encode(cb, offscreen, frame, model, size: CGSize(width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb)), hasLabels: hasLabels)
             let held = Unchecked((pb, cv))
             cb.addCompletedHandler { _ in

@@ -178,6 +178,54 @@ typedef struct SVBlobRecord {
 @end
 
 // ---------------------------------------------------------------------------
+// 导出用的像素运算（点云 PLY / 深度打包 / 裁剪 / 拷贝）
+//
+// 原来这四件事都在 Swift 里逐像素跑（拍一张 640×360 照片要格式化约 14 万行字符串）。
+// 现在全是 C++，这里只做指针与 NSData 的搬运。全部无状态，所以是类方法。
+// ---------------------------------------------------------------------------
+
+@interface SVExporter : NSObject
+
+/// 深度图 + 彩色图（BGRA8）→ ASCII PLY 点云（相机坐标，单位米）。参数非法返回 nil。
+///
+/// intrinsics = (fx, fy, cx, cy)，单位是**深度图**的像素。
++ (nullable NSData *)pointCloudPLY:(const float *)depth
+                       depthStride:(NSInteger)depthStride
+                             width:(NSInteger)width
+                            height:(NSInteger)height
+                        intrinsics:(simd_float4)intrinsics
+                              rgba:(const uint8_t *)rgba
+                        rgbaStride:(NSInteger)rgbaStride
+                         rgbaWidth:(NSInteger)rgbaWidth
+                        rgbaHeight:(NSInteger)rgbaHeight;
+
+/// 深度 → 16 位毫米（写 depth_mm.png 用）。out 必须是 width*height 个 uint16。
++ (BOOL)depthToMillimetres:(const float *)depth
+                    stride:(NSInteger)stride
+                     width:(NSInteger)width
+                    height:(NSInteger)height
+                       out:(uint16_t *)out;
+
+/// 深度裁剪：非有限值或超出 [minZ, maxZ] 的写 0。src/dst 允许不同跨度。
++ (BOOL)filterDepth:(const float *)src
+           srcStride:(NSInteger)srcStride
+                 dst:(float *)dst
+           dstStride:(NSInteger)dstStride
+               width:(NSInteger)width
+              height:(NSInteger)height
+                minZ:(float)minZ
+                maxZ:(float)maxZ;
+
+/// 带跨度 → 紧凑的 float 拷贝（把 MTLBuffer 的行跨度拆掉）。
++ (BOOL)copyDepth:(const float *)src
+        srcStride:(NSInteger)srcStride
+            width:(NSInteger)width
+           height:(NSInteger)height
+              dst:(float *)dst;
+
+@end
+
+// ---------------------------------------------------------------------------
 // 第 2 步：极线矫正（几何）
 //
 // Swift 不直接调 stereo_rectify_geometry：那个结构体里有 float[9] / float[12] / float[16]，

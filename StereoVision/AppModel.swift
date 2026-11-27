@@ -637,6 +637,19 @@ final class AppModel {
         return orientation.isPortrait ? (s, l) : (l, s)
     }
 
+    /// Renderer 每帧问一次：这一帧要不要额外烧一张照片 / 录一帧？
+    ///
+    /// 需要的数据由这里组装好传下去 —— Capture 不再反向持有 AppModel。
+    /// 空闲时（没拍照、没录像）直接返回 nil，连快照都不构造。
+    func captureTarget() -> (CVPixelBuffer, @MainActor (CVPixelBuffer) -> Void)? {
+        if capture.photoPending, let frame = pipeline.store.latest {
+            return capture.beginPhoto(frame: frame, analysis: analysis, overlay: ui,
+                                      metadata: metadata(), size: outputSize(long: 1920))
+        }
+        guard capture.isRecording else { return nil }
+        return capture.beginRecordingFrame(overlay: ui)
+    }
+
     private func sampleTap() -> Float? {
         guard let tap, let f = pipeline.store.latest, let core = queryCore else { return nil }
         let p = orientation.buffer(tap)          // 屏幕坐标 -> 相机 buffer 坐标（深度图在 buffer 坐标系里）
@@ -699,7 +712,7 @@ extension AppModel: CaptureIntents {
 
     func takePhoto() { capture.takePhoto() }
 
-    func toggleRecording() { capture.toggleRecording() }
+    func toggleRecording() { capture.toggleRecording(size: outputSize(long: 1280)) }
 
     func measureTap(at normalized: CGPoint) { measure(at: normalized) }
 

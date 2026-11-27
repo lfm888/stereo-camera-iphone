@@ -17,6 +17,7 @@
 #include "stereo/stereo_c_api.h"
 
 #include <cstdint>
+#include <cstdlib>
 #include <vector>
 
 namespace {
@@ -386,3 +387,68 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
 
 @end
 
+
+// MARK: - 导出用的像素运算
+
+@implementation SVExporter
+
++ (nullable NSData *)pointCloudPLY:(const float *)depth
+                       depthStride:(NSInteger)depthStride
+                             width:(NSInteger)width
+                            height:(NSInteger)height
+                        intrinsics:(simd_float4)intrinsics
+                              rgba:(const uint8_t *)rgba
+                        rgbaStride:(NSInteger)rgbaStride
+                         rgbaWidth:(NSInteger)rgbaWidth
+                        rgbaHeight:(NSInteger)rgbaHeight {
+    if (depth == nullptr || rgba == nullptr || width <= 0 || height <= 0) return nil;
+
+    // 第一遍问精确尺寸，第二遍写进 malloc 出来的缓冲，最后交给 NSData 托管（零额外拷贝）。
+    size_t need = 0;
+    if (stereo_point_cloud(depth, (int)depthStride, (int)width, (int)height, intrinsics.x,
+                           intrinsics.y, intrinsics.z, intrinsics.w, rgba, (int)rgbaStride,
+                           (int)rgbaWidth, (int)rgbaHeight, nullptr, 0, &need) != 0 ||
+        need == 0) {
+        return nil;
+    }
+    char *buf = static_cast<char *>(std::malloc(need));
+    if (buf == nullptr) return nil;
+    size_t written = 0;
+    if (stereo_point_cloud(depth, (int)depthStride, (int)width, (int)height, intrinsics.x,
+                           intrinsics.y, intrinsics.z, intrinsics.w, rgba, (int)rgbaStride,
+                           (int)rgbaWidth, (int)rgbaHeight, buf, need, &written) != 0) {
+        std::free(buf);
+        return nil;
+    }
+    return [NSData dataWithBytesNoCopy:buf length:written freeWhenDone:YES];
+}
+
++ (BOOL)depthToMillimetres:(const float *)depth
+                    stride:(NSInteger)stride
+                     width:(NSInteger)width
+                    height:(NSInteger)height
+                       out:(uint16_t *)out {
+    return stereo_depth_to_u16_mm(depth, (int)stride, (int)width, (int)height, out) == 0;
+}
+
++ (BOOL)filterDepth:(const float *)src
+           srcStride:(NSInteger)srcStride
+                 dst:(float *)dst
+           dstStride:(NSInteger)dstStride
+               width:(NSInteger)width
+              height:(NSInteger)height
+                minZ:(float)minZ
+                maxZ:(float)maxZ {
+    return stereo_depth_filter(src, (int)srcStride, dst, (int)dstStride, (int)width, (int)height,
+                               minZ, maxZ) == 0;
+}
+
++ (BOOL)copyDepth:(const float *)src
+        srcStride:(NSInteger)srcStride
+            width:(NSInteger)width
+           height:(NSInteger)height
+              dst:(float *)dst {
+    return stereo_copy_depth(src, (int)srcStride, (int)width, (int)height, dst) == 0;
+}
+
+@end

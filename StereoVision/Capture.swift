@@ -13,8 +13,8 @@ final class Capture {
     private(set) var recordingStart: Date?
     private(set) var message: String?
 
-    @ObservationIgnored weak var model: AppModel?
-    @ObservationIgnored private var photoPending = false
+    /// 有一次拍照请求在等下一帧。AppModel 据此决定要不要走拍照分支。
+    @ObservationIgnored private(set) var photoPending = false
     @ObservationIgnored private var writer: AVAssetWriter?
     @ObservationIgnored private var input: AVAssetWriterInput?
     @ObservationIgnored private var adaptor: AVAssetWriterInputPixelBufferAdaptor?
@@ -23,28 +23,42 @@ final class Capture {
 
     func takePhoto() { photoPending = true }
 
-    func toggleRecording() { isRecording ? stopRecording() : startRecording() }
+    func toggleRecording(size: (w: Int, h: Int)) {
+        isRecording ? stopRecording() : startRecording(size: size)
+    }
 
-    func target() -> (CVPixelBuffer, @MainActor (CVPixelBuffer) -> Void)? {
-        guard let model else { return nil }
-        if photoPending {
-            photoPending = false
-            let (w, h) = model.outputSize(long: 1920)
-            guard let frame = model.pipeline.store.latest, let pb = Self.buffer(w, h) else { return nil }
-            let snapshot = Snapshot(frame: frame, depth: frame.depthCopy(), analysis: model.analysis, meta: model.metadata())
-            return (pb, { [weak self] in self?.finishPhoto($0, snapshot) })
+    /// 拍一张照片：返回待渲染的缓冲，以及渲染完的收尾。
+    ///
+    /// 需要的东西全部由调用方传进来 —— Capture 不再反向持有 AppModel。
+    func beginPhoto(frame: StereoFrame, analysis: Analysis, overlay: CaptureUIState,
+                    metadata: [String: Any],
+                    size: (w: Int, h: Int)) -> (CVPixelBuffer, @MainActor (CVPixelBuffer) -> Void)? {
+        photoPending = false
+        guard let pb = Self.buffer(size.w, size.h) else { return nil }
+        // 深度图在共享 MTLBuffer 里、带行跨度：拷成紧凑数组才能跨帧安全使用（C++ 里拷）。
+        var depth = [Float](repeating: 0, count: frame.width * frame.height)
+        depth.withUnsafeMutableBufferPointer { out in
+            _ = SVExporter.copyDepth(frame.depthPointer, srcStride: frame.depthStride,
+                                    width: frame.width, height: frame.height,
+                                    dst: out.baseAddress!)
         }
-        guard isRecording, let adaptor, let input, input.isReadyForMoreMediaData, let pool = adaptor.pixelBufferPool else { return nil }
+        let snapshot = Snapshot(frame: frame, depth: depth, analysis: analysis, meta: metadata)
+        return (pb, { [weak self] in self?.finishPhoto($0, snapshot, overlay: overlay) })
+    }
+
+    /// 录一帧：还没开始录、或 writer 还没准备好就返回 nil。
+    func beginRecordingFrame(overlay: CaptureUIState) -> (CVPixelBuffer, @MainActor (CVPixelBuffer) -> Void)? {
+        guard isRecording, let adaptor, let input, input.isReadyForMoreMediaData,
+              let pool = adaptor.pixelBufferPool else { return nil }
         var pb: CVPixelBuffer?
         CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pb)
         guard let pb else { return nil }
         let t = CACurrentMediaTime()
-        return (pb, { [weak self] in self?.append($0, t) })
+        return (pb, { [weak self] in self?.append($0, t, overlay: overlay) })
     }
 
-    private func startRecording() {
-        guard let model else { return }
-        let (w, h) = model.outputSize(long: 1280)
+    private func startRecording(size: (w: Int, h: Int)) {
+        let (w, h) = size
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("StereoVision-\(Self.stamp()).mp4")
         do {
             let wr = try AVAssetWriter(outputURL: url, fileType: .mp4)
@@ -89,16 +103,16 @@ final class Capture {
         }
     }
 
-    private func append(_ pb: CVPixelBuffer, _ t: CFTimeInterval) {
+    private func append(_ pb: CVPixelBuffer, _ t: CFTimeInterval, overlay: CaptureUIState) {
         guard isRecording, let adaptor, let input, input.isReadyForMoreMediaData else { return }
-        drawOverlay(pb)
+        drawOverlay(pb, overlay: overlay)
         let start = t0 ?? t
         t0 = start
         adaptor.append(pb, withPresentationTime: CMTime(seconds: t - start, preferredTimescale: 600))
     }
 
-    private func finishPhoto(_ pb: CVPixelBuffer, _ snap: Snapshot) {
-        drawOverlay(pb)
+    private func finishPhoto(_ pb: CVPixelBuffer, _ snap: Snapshot, overlay: CaptureUIState) {
+        drawOverlay(pb, overlay: overlay)
         guard let view = CIContext().createCGImage(CIImage(cvPixelBuffer: pb), from: CGRect(x: 0, y: 0, width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb))) else { return }
         let image = UIImage(cgImage: view)
         Task {
@@ -119,8 +133,7 @@ final class Capture {
         }
     }
 
-    private func drawOverlay(_ pb: CVPixelBuffer) {
-        guard let model else { return }
+    private func drawOverlay(_ pb: CVPixelBuffer, overlay state: CaptureUIState) {
         CVPixelBufferLockBaseAddress(pb, [])
         defer { CVPixelBufferUnlockBaseAddress(pb, []) }
         let w = CVPixelBufferGetWidth(pb), h = CVPixelBufferGetHeight(pb)
@@ -129,7 +142,7 @@ final class Capture {
                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return }
         let lw: CGFloat = 720, lh = lw * CGFloat(h) / CGFloat(w)
         ctx.scaleBy(x: CGFloat(w) / lw, y: CGFloat(h) / lh)
-        ImageRenderer(content: OverlayView(state: model.ui, hints: false).frame(width: lw, height: lh)).render { _, draw in draw(ctx) }
+        ImageRenderer(content: OverlayView(state: state, hints: false).frame(width: lw, height: lh)).render { _, draw in draw(ctx) }
     }
 
     private func flash(_ text: String) {
@@ -183,7 +196,11 @@ extension Capture {
             try png(rgb, dir.appendingPathComponent("rgb.png"))
         }
 
-        let mm = s.depth.map { UInt16(min(65535, max(0, $0 * 1000)).rounded()) }
+        var mm = [UInt16](repeating: 0, count: f.width * f.height)
+        mm.withUnsafeMutableBufferPointer { out in
+            _ = SVExporter.depthToMillimetres(s.depth, stride: f.width, width: f.width,
+                                              height: f.height, out: out.baseAddress!)
+        }
         let depthData = mm.withUnsafeBytes { Data($0) }
         if let provider = CGDataProvider(data: depthData as CFData),
            let img = CGImage(width: f.width, height: f.height, bitsPerComponent: 16, bitsPerPixel: 16, bytesPerRow: f.width * 2,
@@ -216,27 +233,24 @@ extension Capture {
         guard CGImageDestinationFinalize(dst) else { throw CocoaError(.fileWriteUnknown) }
     }
 
+    /// 点云 PLY 全在 C++（core/src/cloud.cpp）：反投影、颜色取样、%.4f 格式化、
+    /// 头部顶点数统计一次做完，这里只负责把字节写进文件。
     private nonisolated static func ply(_ s: Snapshot, _ url: URL) throws {
         let f = s.frame, pb = f.image
         CVPixelBufferLockBaseAddress(pb, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
-        let base = CVPixelBufferGetBaseAddress(pb)!.assumingMemoryBound(to: UInt8.self)
-        let bpr = CVPixelBufferGetBytesPerRow(pb), cw = CVPixelBufferGetWidth(pb), ch = CVPixelBufferGetHeight(pb)
-        var body = ""
-        body.reserveCapacity(s.depth.count * 40)
-        var n = 0
-        for y in 0..<f.height {
-            for x in 0..<f.width {
-                let z = s.depth[y * f.width + x]
-                guard z > 0 else { continue }
-                let X = (Float(x) + 0.5 - f.K.cx) * z / f.K.fx
-                let Y = (Float(y) + 0.5 - f.K.cy) * z / f.K.fy
-                let p = base + min(ch - 1, y * ch / f.height) * bpr + min(cw - 1, x * cw / f.width) * 4
-                body += String(format: "%.4f %.4f %.4f %d %d %d\n", X, Y, z, p[2], p[1], p[0])
-                n += 1
-            }
+        guard let base = CVPixelBufferGetBaseAddress(pb) else { throw CocoaError(.fileWriteUnknown) }
+        let k = f.K
+        guard let data = SVExporter.pointCloudPLY(s.depth,
+                                                  depthStride: f.width,
+                                                  width: f.width, height: f.height,
+                                                  intrinsics: SIMD4(k.fx, k.fy, k.cx, k.cy),
+                                                  rgba: base.assumingMemoryBound(to: UInt8.self),
+                                                  rgbaStride: CVPixelBufferGetBytesPerRow(pb),
+                                                  rgbaWidth: CVPixelBufferGetWidth(pb),
+                                                  rgbaHeight: CVPixelBufferGetHeight(pb)) else {
+            throw CocoaError(.fileWriteUnknown)
         }
-        let header = "ply\nformat ascii 1.0\nelement vertex \(n)\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n"
-        try (header + body).write(to: url, atomically: true, encoding: .ascii)
+        try data.write(to: url)
     }
 }

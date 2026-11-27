@@ -60,25 +60,11 @@ final class StereoFrame: @unchecked Sendable {
     }
 
     /// 深度图在 CPU 侧的指针与**像素**行跨度（指向共享 MTLBuffer，C++ 直接读写）。
-    /// 点选测距、连通域分析都走这两个。
+    /// 点选测距、连通域分析、导出都走这两个。
     var depthPointer: UnsafeMutablePointer<Float> {
         buffer.contents().assumingMemoryBound(to: Float.self)
     }
     var depthStride: Int { rowStride }
-
-    /// 按行跨度拍平成紧凑数组（导出 / 写 PNG 用）。
-    func depthCopy() -> [Float] {
-        var out = [Float](repeating: 0, count: width * height)
-        for y in 0..<height {
-            let r = row(y)
-            for x in 0..<width { out[y * width + x] = r[x] }
-        }
-        return out
-    }
-
-    func row(_ y: Int) -> UnsafePointer<Float> {
-        UnsafePointer(buffer.contents().assumingMemoryBound(to: Float.self) + y * rowStride)
-    }
 }
 
 final class DepthTarget {
@@ -463,14 +449,12 @@ final class StereoEngine: @unchecked Sendable {
         let src = CVPixelBufferGetBaseAddress(map)!
         let srcStride = CVPixelBufferGetBytesPerRow(map)
         let dst = target.buffer.contents()
-        for y in 0..<h {
-            let a = (src + y * srcStride).assumingMemoryBound(to: Float.self)
-            let b = (dst + y * target.bytesPerRow).assumingMemoryBound(to: Float.self)
-            for x in 0..<w {
-                let z = a[x]
-                b[x] = z.isFinite && z >= s.minZ && z <= s.maxZ ? z : 0
-            }
-        }
+        // 逐像素的 minZ/maxZ 归一化在 C++（core/src/cloud.cpp 的 depth_filter）。
+        _ = SVExporter.filterDepth(src.assumingMemoryBound(to: Float.self),
+                                   srcStride: srcStride / MemoryLayout<Float>.size,
+                                   dst: dst.assumingMemoryBound(to: Float.self),
+                                   dstStride: target.bytesPerRow / MemoryLayout<Float>.size,
+                                   width: w, height: h, minZ: s.minZ, maxZ: s.maxZ)
         CVPixelBufferUnlockBaseAddress(map, .readOnly)
 
         let K = CalibrationSource.depthIntrinsics(data, width: w, height: h, fovDeg: rig?.wide.fovDeg ?? 70)
