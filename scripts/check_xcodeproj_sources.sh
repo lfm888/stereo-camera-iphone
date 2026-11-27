@@ -35,7 +35,7 @@ trap 'rm -f "$DISK" "$PROJ"' EXIT
 {
     find StereoVision -type f \( -name '*.swift' -o -name '*.mm' -o -name '*.m' -o -name '*.metal' \)
     find core/src -type f \( -name '*.cpp' -o -name '*.c' \)
-} | sed 's#^\./##' | sort -u > "$DISK"
+} | sed 's#^\./##' | LC_ALL=C sort -u > "$DISK"
 
 # 2) 生成工程里实际参与编译的文件（所有 target）
 ruby - "$PROJECT" > "$PROJ" <<'RUBY'
@@ -58,6 +58,10 @@ end
 puts names.uniq.sort
 RUBY
 
+# 两个清单都必须按**字节序**排：Ruby 的 String#sort 是字节序，而 macOS 的 sort
+# 在 en_US.UTF-8 下是大小写不敏感排序（"core" 会排到 "StereoVision" 前面），
+# 混用会得出"内容相同但顺序不同"的假失败。
+LC_ALL=C sort -u -o "$PROJ" "$PROJ"
 echo "== 磁盘上 $(wc -l < "$DISK" | tr -d ' ') 个源文件 / 工程里 $(wc -l < "$PROJ" | tr -d ' ') 个 =="
 
 if diff -u "$DISK" "$PROJ"; then
