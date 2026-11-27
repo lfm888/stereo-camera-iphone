@@ -1,3 +1,15 @@
+//
+//  Rendering/MetalSceneRenderer.swift
+//  StereoVision
+//
+//  MetalKit 渲染：把 FrameStore 里最新一帧的纹理画到 MTKView（显示 / 点云），
+//  在拍照/录像时额外烧一帧到离屏 CVPixelBuffer。
+//
+//  只读帧与界面状态，不参与采集与匹配；与界面层的唯一接触点是
+//  `AppModel.ui` / `AppModel.analysis` / `AppModel.captureTarget()`。
+//  MTKView 的 SwiftUI 包装在 MetalView.swift。
+//
+
 import MetalKit
 import simd
 
@@ -25,7 +37,7 @@ struct PCParams {
 }
 
 @MainActor
-final class Renderer: NSObject, MTKViewDelegate {
+final class MetalSceneRenderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
     weak var model: AppModel?
     private let queue: MTLCommandQueue

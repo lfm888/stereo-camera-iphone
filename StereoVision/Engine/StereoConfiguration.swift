@@ -4,7 +4,7 @@
 //
 //  "用哪套后端"是**配置**，不是又一条复制出来的全流程。
 //
-//  产品上的三种模式（见 STEREO_ENGINE_BACKEND_REFACTOR_PLAN.md §5）：
+//  产品上的三种模式（见 docs/engine-backend-refactor.md §1）：
 //
 //    .metal      rectification=Metal, matching=Metal(SGM|Block), depth=Metal
 //    .cppHybrid  rectification=Metal, readback=CPU, matching=C++, depth=C++

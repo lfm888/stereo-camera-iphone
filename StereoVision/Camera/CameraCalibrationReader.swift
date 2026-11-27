@@ -1,5 +1,5 @@
 //
-//  Calibration.swift
+//  Camera/CameraCalibrationReader.swift
 //  StereoVision
 //
 //  四步管线里的**第 1 步：双目标定**。
@@ -17,7 +17,7 @@
 //    ❌ 任何几何推导（矫正旋转、单应、视差→深度）—— 那些在 core/src/geometry.cpp，
 //       也就是第 2 步。这里只搬数，不解方程。
 //
-//  以后要加前置相机 / 深度相机：在这个文件里加一个 `CalibrationSource` 的
+//  以后要加前置相机 / 深度相机：在这个文件里加一个 `CameraCalibrationReader` 的
 //  `static func`（或给 `DVDepthData` 那一条加一支），然后把内参交给
 //  `StereoEngine` / `SVRectifyInput` 即可。不要在这里写任何几何推导。
 //
@@ -30,7 +30,7 @@ import simd
 
 /// 针孔内参，单位是**原始图像像素**。
 ///
-/// 这是全 App 唯一的 Intrinsics 定义：Analyzer / Renderer / 导出 meta.json 都用它，
+/// 这是全 App 唯一的 Intrinsics 定义：DepthSceneAnalyzer / MetalSceneRenderer / 导出 meta.json 都用它，
 /// 交给 C++ 时按字段拆进 `stereo_rectify_input.wide/ultra`。
 struct Intrinsics: Sendable {
     var fx: Float = 1
@@ -69,7 +69,7 @@ struct CameraRig: Sendable {
 // MARK: - 读取（唯一的 AVFoundation 接触面）
 
 /// 相机参数的读取入口。全部是静态方法，无状态。
-enum CalibrationSource {
+enum CameraCalibrationReader {
 
     /// 从一帧视频里读内参。
     ///
@@ -109,7 +109,7 @@ enum CalibrationSource {
     ///
     /// 返回的 `rotation`/`translation` 满足 `X_to = R * X_from + t`（t 单位毫米）。
     /// 系统不给时返回 `fromSystem == false` 与一个 12 mm 的回退基线——那是"未知"的
-    /// 标记，不是可用的标定值，`Pipeline` 会据此在 HUD 上提示。
+    /// 标记，不是可用的标定值，`FramePipeline` 会据此在 HUD 上提示。
     static func extrinsics(from source: AVCaptureDevice,
                            to target: AVCaptureDevice) -> StereoExtrinsics {
         var e = StereoExtrinsics()

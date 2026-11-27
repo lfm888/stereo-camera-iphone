@@ -9,7 +9,7 @@
 //
 //  StereoFrame 的生命周期约定（详见 docs/engine-backend-baseline.md）：
 //    * retained 里的对象（CVMetalTexture / CMSampleBuffer）必须活到 GPU 与 C++ 都用完；
-//    * depthPointer 指向共享 MTLBuffer，谁读谁负责（跨帧使用要先拷贝，Capture 就是这么做的）。
+//    * depthPointer 指向共享 MTLBuffer，谁读谁负责（跨帧使用要先拷贝，MediaExportManager 就是这么做的）。
 //
 
 import CoreVideo

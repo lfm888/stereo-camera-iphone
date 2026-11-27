@@ -1,6 +1,6 @@
 # StereoEngine 改造前基线（Phase 0）
 
-> 这份文件是 `STEREO_ENGINE_BACKEND_REFACTOR_PLAN.md` 的 Phase 0 产出：改代码**之前**
+> 这份文件是后端拆分改造的 **Phase 0 产出**：改代码**之前**先把当前的调用关系、线程、
 > 先把当前的调用关系、线程、资源生命周期、三条路径的实际阶段和计时口径记下来。
 > 后面每一次迁移都以这份记录为对照，行为不一致就是回归。
 >
@@ -110,5 +110,5 @@ cd build/core && ctest -C Release
 ```
 
 Swift / Metal 侧本机（Windows）没有工具链，真机回归清单见
-`STEREO_ENGINE_BACKEND_REFACTOR_PLAN.md` §8 Phase 7；本轮只做代码结构的等价迁移，
+`docs/engine-backend-refactor.md` §6（真机回归清单）；本轮只做代码结构的等价迁移，
 kernel、C ABI、C++ 算法、pixel format、参数与计时口径均未改动。

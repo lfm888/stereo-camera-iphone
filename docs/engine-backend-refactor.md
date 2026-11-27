@@ -1,6 +1,6 @@
 # StereoEngine 后端解耦：改造记录与验收清单
 
-> 对应 `STEREO_ENGINE_BACKEND_REFACTOR_PLAN.md` 的 Phase 1–7。
+> 本次改造按 Phase 0–7 执行（Phase 0 基线见 `docs/engine-backend-baseline.md`）。
 > 落点：`StereoVision/StereoEngine.swift`（481 行）→ `StereoVision/Engine/`（22 个文件）。
 > 改造**前**的调用关系 / 线程 / 资源生命周期 / 计时口径记录在
 > `docs/engine-backend-baseline.md`，本文只写"改成什么样、凭什么等价、怎么验"。
@@ -133,3 +133,48 @@ C++ 与 shader 未改动，所以 golden / 几何 / 分析 / 标定的逐位结�
 如果 Metal 模式出现差异，优先检查 `MetalDispatch` 的 `setBytes` index 与
 `MetalShaderTypes` 的字段顺序；如果 C++ 模式出现差异，优先检查
 `CPUImageReadback` 的左右跨度/格式声明。
+
+## 7. 根目录归档与重命名（`stereovision_agent.md` 执行记录）
+
+第二阶段：`StereoVision/` 顶层 14 个 Swift 文件归入子目录并语义化重命名。
+**只改路径/符号名/注释，算法、timer、shader 参数、C++ 与 Bridge 均未动。**
+
+| 原路径 | 新路径 | 符号 |
+|---|---|---|
+| `ContentView.swift` | `StereoVisionApp.swift`（只留 `@main`）+ `UI/RootView.swift` | `ContentView` → `RootView` |
+| `ContentView.swift` 里的 `MetalView` | `Rendering/MetalView.swift` | 新增文件（`import MetalKit` 不能留在 UI/） |
+| `Contracts.swift` | `Contracts/UIContracts.swift` | `DisplayOrientation` / `SettingsDraft` / `DeviceInfo` / `CaptureUIState` / `CaptureIntents` / `SettingsIntents` / `GpuReport` / `DiagnosticsSnapshot` |
+| `Contracts.swift` + `Pipeline.swift` 的数据结构 | `Contracts/PipelineContracts.swift` | `ViewMode` / `Matcher` / `PipelineSettings` / `PipelineKind` / `StageTimings` / `FrameReport` / `FrameStore` |
+| `Pipeline.swift` | `App/FramePipeline.swift` | `Pipeline` → `FramePipeline`（只剩调度） |
+| `AppModel.swift` | `App/AppModel.swift` | 不变 |
+| `CameraController.swift` | `Camera/CameraSessionController.swift` | `CameraController` → `CameraSessionController`（`DepthSource` 不变） |
+| `Calibration.swift` | `Camera/CameraCalibrationReader.swift` | `CalibrationSource` → `CameraCalibrationReader` |
+| `Analyzer.swift` | `Analysis/DepthSceneAnalyzer.swift` | `Analyzer` → `DepthSceneAnalyzer` |
+| `Renderer.swift` | `Rendering/MetalSceneRenderer.swift` | `Renderer` → `MetalSceneRenderer` |
+| `Capture.swift` | `Rendering/MediaExportManager.swift` | `Capture` → `MediaExportManager` |
+| `CaptureScreen.swift` / `SettingsScreen.swift` / `DiagnosticsScreen.swift` / `OverlayView.swift` | `UI/` 同名 | 不变 |
+
+### 7.1 结果结构
+
+```
+StereoVision/
+├── StereoVisionApp.swift      @main
+├── Shaders.metal
+├── Bridge/  Engine/           保持原样
+├── Contracts/  UIContracts.swift · PipelineContracts.swift
+├── UI/         RootView · CaptureScreen · SettingsScreen · DiagnosticsScreen · OverlayView
+├── App/        AppModel · FramePipeline
+├── Camera/     CameraSessionController · CameraCalibrationReader
+├── Analysis/   DepthSceneAnalyzer
+└── Rendering/  MetalSceneRenderer · MetalView · MediaExportManager
+```
+
+### 7.2 依赖规则与验证
+
+- `UI/`：只 `import SwiftUI`；grep `import (AVFoundation|MetalKit)|StereoEngine|SVStereoCore` 为空。
+- `Contracts/`：只 `import CoreGraphics/Foundation`；grep `import (SwiftUI|AVFoundation)` 为空。
+- 旧类名（`CameraController` / `CalibrationSource` / `Analyzer` / `Renderer`）在全仓 `StereoVision/` 下零残留（含注释）。
+- `Engine/` 未反向依赖 UI/App/Rendering/Analysis；唯一跨层是 `Engine/Input`、`Engine/Depth` 消费
+  `Camera/CameraCalibrationReader` 的**标定数据**（`Intrinsics` / `CameraRig`），这是几何求解的输入，不涉及会话/设备。
+- `project.yml` 的 `sources: - path: StereoVision` 是递归的，新增子目录无需改工程；`scripts/check_xcodeproj_sources.sh` 的 `COMPILED_DIRS` 仍覆盖。
+- 验证：`ctest` 7/7（C++ 未动）；Swift 侧由 CI 的 `xcodegen generate` + `xcodebuild` 编译。

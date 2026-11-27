@@ -6,9 +6,9 @@ iPhone 后置双摄（广角 + 超广角）做实时立体匹配，测出每个�
 
 > 本分支删掉了语义分割模型（CoreML）与 Bird's-eye 视图，只用传统方法（Census + SGM）算深度。
 > 重构的完整过程、取舍与踩坑记录在 [`test.md`](test.md)；本文只回答「这套代码怎么组织的、为什么」。
-> **文件清单与调用链以 [`ARCHITECTURE.md`](ARCHITECTURE.md) 为准**——本文下面 §0 的目录树写在
-> 拆分 Swift 之前，已经滞后（`Analyzer/Contracts/Pipeline/CaptureScreen/SettingsScreen`
-> 与 `core/` 下的 geometry/rectify/sample/analyze/cloud/calibrate/params 都是后来加的）。
+> **文件清单与调用链以 [`ARCHITECTURE.md`](ARCHITECTURE.md) 为准**——下面的目录树已按
+> `stereovision_agent.md` 整理过（UI/Contracts/App/Camera/Analysis/Rendering/Engine），
+> 若与本文件冲突，仍以 `ARCHITECTURE.md` 为准。
 
 ---
 
@@ -31,6 +31,28 @@ StereoVision/Bridge/               ② C / Objective-C++ 中间层
 
 StereoVision/                      ③ Swift 前端
   StereoVision-Bridging-Header.h     编译器开关（只有一行 #import）
+  StereoVisionApp.swift              @main（只接 RootView）
+  UI/                                SwiftUI 界面（只依赖 Contracts）
+    RootView.swift                   连线根：AppModel + 两个 sheet
+    CaptureScreen.swift              主拍摄界面（HUD / SidePanel / 手势）
+    SettingsScreen.swift             参数设置（草稿 + Apply）
+    DiagnosticsScreen.swift          GPU/CPU 诊断（只读快照）
+    OverlayView.swift                准星 / 面块框 / 点选气泡
+  Contracts/                         界面与引擎的共同语言（无 UI 框架依赖）
+    UIContracts.swift                CaptureUIState / SettingsDraft / DeviceInfo / Intents / 诊断快照
+    PipelineContracts.swift          ViewMode / Matcher / PipelineSettings / FrameReport / FrameStore
+  App/                               接线与调度
+    AppModel.swift                   状态聚合 + 意图实现（主线程）
+    FramePipeline.swift              每帧调度（相机队列）
+  Camera/
+    CameraSessionController.swift    双摄 / 系统深度两路采集
+    CameraCalibrationReader.swift    第 1 步：只读系统给的 K / R / t
+  Analysis/
+    DepthSceneAnalyzer.swift         深度连通域 → 3D segmentation 标签
+  Rendering/
+    MetalSceneRenderer.swift         各视图的渲染（Metal）
+    MetalView.swift                  MTKView 的 SwiftUI 包装
+    MediaExportManager.swift         拍照 / 录像 / 导出
   Engine/                            双目流程编排 + 可替换的阶段后端
     StereoEngine.swift               唯一编排者（输入 → 几何 → 矫正 → 匹配 → 深度）
     StereoConfiguration.swift        后端组合：StereoMode.metal / .cppHybrid
@@ -42,14 +64,11 @@ StereoVision/                      ③ Swift 前端
     Calibration/ StereoCalibrator.swift   C++ 候选搜索 + GPU 打分
     Readback/ CPUImageReadback.swift     像素读回适配（C++ 匹配的输入）
     Metal/                            MetalContext / MetalPipelines / MetalFrameResources / MetalDispatch
-  CameraController.swift             双摄 / 系统深度两路采集
-  Renderer.swift · Shaders.metal     各视图的渲染（Metal）
-  Analyzer.swift                     深度连通域 → 3D segmentation 标签
-  AppModel.swift · ContentView.swift · OverlayView.swift · DiagnosticsScreen.swift
+  Shaders.metal                      GPU kernel（显示 / 点云 / 计算）
 ```
 
 各阶段跑在 GPU 还是 CPU、资源谁写谁读、计时口径，见
-`docs/engine-backend-baseline.md`；目录与职责的完整表在 `ARCHITECTURE.md` §3.2.1。
+`docs/engine-backend-baseline.md`；目录与职责的完整表在 `ARCHITECTURE.md` §3.2.5。
 
 | 层 | 语言 | 职责 | 不知道什么 |
 |---|---|---|---|
@@ -421,7 +440,7 @@ kernel 的耗时（要拆得用 `MTLCounterSampleBuffer`）。C++ 路径天然�
 | 极线矫正 | GPU（矩阵来自 C++） | ❌ | GPU 更快；而且**矫正后的两张纹理还被 Rectified pair / Anaglyph 视图消费** |
 | 匹配 SGM | C++（`stereo_match` 内部已含 census/cost/sgm×4/wta 五小步） | ❌ 不该 | **视差的生产者可能换人**（ONNX / CoreML），焊进 C++ 打包函数就把替换入口锁死了 |
 | toDepth + unrectify | C++ | ✅ | 纯算术，无平台交互，两者紧邻 |
-| 连通域分析 | C++，但由 `Pipeline.finish` 调用 | ❌ 不该 | **三条管线共用**（Metal / C++ / 系统深度）；焊进 C++ 专用路径会让另两条路再单独调一次 |
+| 连通域分析 | C++，但由 `FramePipeline.finish` 调用 | ❌ 不该 | **三条管线共用**（Metal / C++ / 系统深度）；焊进 C++ 专用路径会让另两条路再单独调一次 |
 
 所以分界线是三条，而不是"一个全流程函数"：
 

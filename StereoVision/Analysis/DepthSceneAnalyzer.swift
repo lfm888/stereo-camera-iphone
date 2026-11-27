@@ -1,16 +1,16 @@
 //
-//  Analyzer.swift
+//  DepthSceneAnalyzer.swift
 //  StereoVision
 //
 //  **薄适配层**：把 core/src/analyze.cpp 算出来的深度连通域，翻译成 SwiftUI 用得上的类型。
 //
 //  这里一行算法都没有 —— 降采样、4 邻域连通域、容差、排序、反投影全在 C++：
-//      Analyzer.analyze()  →  SVStereoCore.analyzeDepth(_:...into:)
+//      DepthSceneAnalyzer.analyze()  →  SVStereoCore.analyzeDepth(_:...into:)
 //                          →  stereo_analyze()（core/src/stereo_c_api.cpp）
 //                          →  analyze_depth()（core/src/analyze.cpp）
 //
-//  之所以还留一个 Swift 文件：`Analysis` / `Blob` 被 OverlayView（画框）、Renderer（上传标签图）、
-//  Capture（写 meta.json）三处消费，它们需要 CGRect / Swift 数组。转换就在这一层做完。
+//  之所以还留一个 Swift 文件：`Analysis` / `Blob` 被 OverlayView（画框）、MetalSceneRenderer（上传标签图）、
+//  MediaExportManager（写 meta.json）三处消费，它们需要 CGRect / Swift 数组。转换就在这一层做完。
 //
 
 import CoreGraphics
@@ -34,7 +34,7 @@ struct Analysis: Sendable {
     var center: Float?
 }
 
-final class Analyzer {
+final class DepthSceneAnalyzer {
     /// 复用同一个结果容器：C++ 侧的临时缓冲跟着它走，稳态零分配。
     private let result = SVAnalysis()
 
@@ -79,7 +79,7 @@ final class Analyzer {
             a.blobs = blobs
         }
 
-        // 标签图：C++ 已经按"保留的块"重排成 1..count，直接给 Renderer 上传
+        // 标签图：C++ 已经按"保留的块"重排成 1..count，直接给 MetalSceneRenderer 上传
         let n = a.gridW * a.gridH
         if n > 0 {
             a.labels = Array(UnsafeBufferPointer(

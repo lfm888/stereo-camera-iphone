@@ -7,9 +7,15 @@
 ## 0. 五层，依赖只向下
 
 ```
-StereoVision/*.swift + Engine/  SwiftUI 界面 + 运行时（相机/渲染/导出）
-StereoVision/Engine/*.swift     双目流程编排 + 可替换的阶段后端（Metal / C++）
-        │  只读快照 + intent 协议
+StereoVisionApp.swift            @main（只接 RootView）
+StereoVision/UI/*.swift          SwiftUI 界面（只 import SwiftUI）
+StereoVision/Contracts/*.swift   只读快照 + intent + 共享数据模型（无 UI 框架依赖）
+StereoVision/App/*.swift         接线 AppModel + 每帧调度 FramePipeline
+StereoVision/Camera/*.swift      AVFoundation 会话 + 标定读取
+StereoVision/Analysis/*.swift    深度连通域 → Swift 值类型
+StereoVision/Rendering/*.swift   MetalKit 渲染 / MTKView 包装 / 导出
+StereoVision/Engine/*.swift      双目流程编排 + 可替换的阶段后端（Metal / C++）
+        │  Swift 只看 ObjC 头（桥接层是唯一入口）
 StereoVision/Bridge/*.mm      ObjC++ 门面：指针、生命周期、simd ↔ float[9] 换乘
         │  纯 C 头（POD + 不透明句柄）
 core/include + core/src       C++ 算法（零 Apple 依赖、零第三方依赖）
@@ -23,6 +29,7 @@ Shaders.metal                 GPU kernel（iOS 的快路径）
 2. `core/include/stereo/*.hpp` 只给 C++ 与桥接层看；`stereo_c_api.h` 是唯一的 C 契约。
 3. 界面层只拿**值类型**（`CaptureUIState` / `DiagnosticsSnapshot` / `DeviceInfo`）和**协议**（`CaptureIntents` / `SettingsIntents`）——"诊断页不能偷改状态"是编译器保证的。
 4. **工程文件不提交**：`StereoVision.xcodeproj` 由 CI 用 `xcodegen generate --spec project.yml` 生成，`scripts/check_xcodeproj_sources.sh` 保证不漏文件。增删源文件只动文件本身。
+5. **目录红线**（`stereovision_agent.md` §0 的 grep 验收）：`UI/` 不 import AVFoundation/MetalKit、不出现 `StereoEngine`/`SVStereoCore`；`Contracts/` 不 import SwiftUI/AVFoundation；`Engine/` 不反向依赖 UI/App/Rendering/Analysis。唯一例外：`Engine/Input` 与 `Engine/Depth` 消费 `Camera/` 的**标定数据**（`Intrinsics`/`CameraRig`/`CameraCalibrationReader`），不涉及会话与设备。
 
 ## 1. `core/` — C++ 算法
 
@@ -92,33 +99,65 @@ Shaders.metal                 GPU kernel（iOS 的快路径）
 
 这一层只做三件事：指针与生命周期、simd ↔ `float[9]`、POD ↔ ObjC 对象。**不放算法**。
 
-## 3. `StereoVision/` — Swift 前端（3757 行，其中 `Engine/` 1373 行）
+## 3. `StereoVision/` — Swift 前端（3865 行）
 
-### 3.1 界面（5 个文件，只读快照 + intent）
+按"谁可以依赖谁"分目录（红线见 `stereovision_agent.md` §0）：
+
+| 目录 | 内容 | 依赖约束 |
+|---|---|---|
+| 根 | `StereoVisionApp.swift`（`@main`）、`Shaders.metal`、`Bridge/`、`Assets.xcassets` | — |
+| `Contracts/` | 界面快照/意图 + 共享词汇 + 管线数据结构 | 只 import CoreGraphics / Foundation（**不许** SwiftUI / AVFoundation） |
+| `UI/` | 5 个 SwiftUI 视图 | 只 import SwiftUI + Contracts（**不许** AVFoundation / MetalKit，也不许出现 `StereoEngine` / `SVStereoCore`） |
+| `App/` | `AppModel`（接线）+ `FramePipeline`（每帧调度） | 全部 |
+| `Camera/` | AVFoundation 会话 + 标定读取 | AVFoundation / CoreVideo / simd |
+| `Analysis/` | 深度连通域 → Swift 值类型 | CoreGraphics + Bridge |
+| `Rendering/` | MetalKit 渲染、MTKView 包装、导出 | MetalKit / AVFoundation / SwiftUI |
+| `Engine/` | 双目流程 + 阶段后端（§3.2.5） | 不得反向依赖 UI/App/Rendering/Analysis；`Input/` 只消费 Camera 的**标定数据** |
+
+### 3.1 App 入口与界面（`UI/`）
 
 | 文件 | 行 | 职责 | 入参 |
 |---|---|---|---|
-| `ContentView.swift` | 57 | `@main` + 连线根：持有 `AppModel`、管设置 sheet | — |
-| `CaptureScreen.swift` | 194 | 主拍摄界面：预览 + 手势 + `HUD` + `SidePanel` | `CaptureUIState` + `CaptureIntents` + `Renderer` |
-| `SettingsScreen.swift` | 172 | 设置：按参数表生成控件，改 `@State draft`，Apply/Cancel | `SettingsDraft` + `DeviceInfo` + `SettingsIntents` |
-| `DiagnosticsScreen.swift` | 142 | 诊断：整屏 sheet，纯只读；含 `StageDiag` 与 `PipelineKind.rows(_:)` 文案 | `DiagnosticsSnapshot` + `onDismiss` |
-| `OverlayView.swift` | 72 | 主界面 Canvas 叠层（准星读数、面块框、点选气泡） | `CaptureUIState` |
+| `StereoVisionApp.swift` | 21 | `@main`，只做 `WindowGroup { RootView() }` | — |
+| `UI/RootView.swift` | 47 | 连线根：持有 `AppModel`，管设置/诊断两个 sheet | — |
+| `UI/CaptureScreen.swift` | 194 | 主拍摄界面：预览 + 手势 + `HUD` + `SidePanel` | `CaptureUIState` + `CaptureIntents` + `MetalSceneRenderer` |
+| `UI/SettingsScreen.swift` | 172 | 设置：按参数表生成控件，改 `@State draft`，Apply/Cancel | `SettingsDraft` + `DeviceInfo` + `SettingsIntents` |
+| `UI/DiagnosticsScreen.swift` | 142 | 诊断：整屏 sheet，纯只读；含 `StageDiag` 与 `PipelineKind.rows(_:)` 文案 | `DiagnosticsSnapshot` + `onDismiss` |
+| `UI/OverlayView.swift` | 72 | 主界面 Canvas 叠层（准星读数、面块框、点选气泡） | `CaptureUIState` |
 
-### 3.2 运行时（不含 UI）
+### 3.2 运行时
+
+#### 3.2.1 `Contracts/` — 共同语言
+
+| 文件 | 行 | 内容 |
+|---|---|---|
+| `Contracts/UIContracts.swift` | 255 | `DisplayOrientation`、`SettingsDraft`（含 `subscript(key:)`）、`DeviceInfo`、`CaptureUIState`、`CaptureIntents`/`SettingsIntents`、`GpuReport`、`DiagnosticsSnapshot` |
+| `Contracts/PipelineContracts.swift` | 161 | 共享词汇 `ViewMode`/`Matcher` + `PipelineSettings`、`PipelineKind`、`StageTimings`、`FrameReport`、`FrameStore` |
+
+#### 3.2.2 `App/`
 
 | 文件 | 行 | 职责 | 关键成员 |
 |---|---|---|---|
-| `Contracts.swift` | 308 | 共享词汇 + 界面契约 + 诊断值类型 | `ViewMode`/`Matcher`/`DisplayOrientation`、`SettingsDraft`（含 `subscript(key:)`）、`DeviceInfo`/`CaptureUIState`、`CaptureIntents`/`SettingsIntents`、`GpuReport`/`DiagnosticsSnapshot` |
-| `Pipeline.swift` | 155 | 每帧后台管线与报告类型 | `PipelineSettings`、`PipelineKind`、`StageTimings`、`FrameReport`、`FrameStore`、`Pipeline`（`stereo`/`depthData`/`timings(of:)`/`finish`） |
-| `AppModel.swift` | 369 | 状态聚合 + 接线 + 意图实现 | `start`/`setSource`/`calibrate`/`measure`/`captureTarget`/`metadata`/`outputSize` + 只读视图 `ui`/`diagnostics`/`draft`/`device` |
-| `Engine/` | 1373 | 双目流程编排 + 可替换的阶段后端（文件清单见 §3.2.1） | `StereoEngine`、`StereoMode`、各阶段 backend |
-| `CameraController.swift` | 213 | AVFoundation 会话：双摄/系统深度、format 选择、同步输出 | `start`/`stop`、`makeStereo`/`makeDepth`、`dataOutputSynchronizer` |
-| `Calibration.swift` | 157 | **第 1 步**：只向系统要参数，不做几何 | `CalibrationSource.intrinsics(of:fov:size:)`、`.calibration(of:)`、`.extrinsics(from:to:)`、`.rig(wide:ultra:)`、`.depthIntrinsics` |
-| `Analyzer.swift` | 90 | C++ 分析结果的薄适配层（C 结构 → `CGRect`/数组） | `Blob`/`Analysis`/`Analyzer.analyze(_:using:)` |
-| `Renderer.swift` | 199 | MetalKit 渲染：显示 / 点云 / 离屏烧录 | `draw`、`encode`、`uploadLabels`、`drawPoints`、`offscreenPass` + 矩阵工具 |
-| `Capture.swift` | 256 | 拍照/录像/导出（不持有 `AppModel`） | `takePhoto`、`toggleRecording`、`beginPhoto`、`beginRecordingFrame`、`export`、`ply` |
+| `App/AppModel.swift` | 371 | 状态聚合 + 接线 + 意图实现 | `start`/`setSource`/`calibrate`/`measure`/`captureTarget`/`metadata`/`outputSize` + 只读视图 `ui`/`diagnostics`/`draft`/`device` |
+| `App/FramePipeline.swift` | 81 | 每帧在相机队列上的调度（数据结构在 Contracts） | `stereo`/`depthData`/`timings(of:)`/`finish` |
 
-### 3.2.1 引擎阶段（`StereoVision/Engine/`）
+#### 3.2.3 `Camera/`
+
+| 文件 | 行 | 职责 | 关键成员 |
+|---|---|---|---|
+| `Camera/CameraSessionController.swift` | 226 | AVFoundation 会话：双摄/系统深度、format 选择、同步输出 | `start`/`stop`、`makeStereo`/`makeDepth`、`dataOutputSynchronizer`、`DepthSource` |
+| `Camera/CameraCalibrationReader.swift` | 157 | **第 1 步**：只向系统要参数，不做几何 | `intrinsics(of:fov:size:)`、`.calibration(of:)`、`.extrinsics(from:to:)`、`.rig(wide:ultra:)`、`.depthIntrinsics`；数据形状 `Intrinsics`/`CameraRig` |
+
+#### 3.2.4 `Analysis/` 与 `Rendering/`
+
+| 文件 | 行 | 职责 | 关键成员 |
+|---|---|---|---|
+| `Analysis/DepthSceneAnalyzer.swift` | 90 | C++ 分析结果的薄适配层（C 结构 → `CGRect`/数组） | `Blob`/`Analysis`/`DepthSceneAnalyzer.analyze(_:using:)` |
+| `Rendering/MetalSceneRenderer.swift` | 211 | MetalKit 渲染：显示 / 点云 / 离屏烧录 | `draw`、`encode`、`uploadLabels`、`drawPoints`、`offscreenPass` + 矩阵工具 |
+| `Rendering/MetalView.swift` | 26 | `MTKView` 的 SwiftUI 包装（`UIViewRepresentable`）—— UI/ 里唯一不碰 MetalKit 的原因 | `MetalView` |
+| `Rendering/MediaExportManager.swift` | 266 | 拍照/录像/导出（不持有 `AppModel`） | `takePhoto`、`toggleRecording`、`beginPhoto`、`beginRecordingFrame`、`export`、`ply` |
+
+#### 3.2.5 引擎阶段（`Engine/`）
 
 流程固定、阶段可替换。每个后端只做自己那一段，不复制整条流程；`StereoEngine` 是唯一的编排者。
 
@@ -162,37 +201,37 @@ Shaders.metal                 GPU kernel（iOS 的快路径）
 **启动一次（同步）**
 
 ```
-StereoVisionApp                   ContentView.swift
-└─ ContentView                    ContentView.swift
-   └─ AppModel()                  AppModel.swift
+StereoVisionApp                   StereoVisionApp.swift
+└─ RootView                       UI/RootView.swift
+   └─ AppModel()                  App/AppModel.swift
       ├─ StereoEngine(device:)    Engine/StereoEngine.swift → MetalContext + MetalPipelines + MetalFrameResources
       │                                                  + FrameInputProvider + 各阶段 backend + SVStereoCore
-      ├─ Pipeline(engine:)        Pipeline.swift       → FrameStore、Analyzer、PipelineSettings
-      ├─ Renderer(device:store:)  Renderer.swift       → 显示/点云 PSO、labelTex、纹理缓存
-      ├─ Capture()                Capture.swift
-      ├─ CameraController()       CameraController.swift
+      ├─ FramePipeline(engine:)        App/FramePipeline.swift       → FrameStore、DepthSceneAnalyzer、PipelineSettings
+      ├─ MetalSceneRenderer(device:store:)  Rendering/MetalSceneRenderer.swift       → 显示/点云 PSO、labelTex、纹理缓存
+      ├─ MediaExportManager()                Rendering/MediaExportManager.swift
+      ├─ CameraSessionController()       Camera/CameraSessionController.swift
       ├─ 接线 onStereo / onDepth / onDevices / onError / publish
-      └─ watchOrientation()       AppModel.swift       → push{orient}
+      └─ watchOrientation()       App/AppModel.swift       → push{orient}
 ```
 
 **开流**
 
 ```
-ContentView.body                  .task { await model.startCapture() }
-└─ AppModel.startCapture()        AppModel.swift      （CaptureIntents）
+RootView.body                     .task { await model.startCapture() }
+└─ AppModel.startCapture()        App/AppModel.swift      （CaptureIntents）
    └─ AppModel.start()            → AVCaptureDevice 授权 → refreshOrientation → setSource(.stereo)
-      └─ CameraController.start()  CameraController.swift
+      └─ CameraSessionController.start()  Camera/CameraSessionController.swift
          └─ makeStereo()          → MultiCam session + 两个 VideoDataOutput + Synchronizer
             └─ onDevices → StereoEngine.configure()   Engine/StereoEngine.swift
                └─ FrameInputProvider.configure        Engine/Input/FrameInputProvider.swift
-               └─ CalibrationSource.rig()             Calibration.swift   ← 第 1 步：读 K / R / t
+               └─ CameraCalibrationReader.rig()             Camera/CameraCalibrationReader.swift   ← 第 1 步：读 K / R / t
 ```
 
 **每帧（相机数据队列）**
 
 ```
-CameraController.dataOutputSynchronizer(...)     CameraController.swift
-└─ onStereo → Pipeline.stereo                    Pipeline.swift
+CameraSessionController.dataOutputSynchronizer(...)     Camera/CameraSessionController.swift
+└─ onStereo → FramePipeline.stereo                    App/FramePipeline.swift
    ├─ [可选] StereoEngine.calibrate              Engine/StereoEngine.swift
    │         └─ StereoCalibrator.calibrate       Engine/Calibration/StereoCalibrator.swift
    │            （C++ 候选搜索 + GPU 打分：rectify → census → block match，用 slots[0]）
@@ -203,24 +242,24 @@ CameraController.dataOutputSynchronizer(...)     CameraController.swift
    │  ├─ Metal(SGM|Block)Matcher.encodeCensus/Match
    │  ├─ MetalDepthProcessor.encode              → toDepth → unrectifyDepth
    │  └─ 以上全部在**一条** command buffer 里
-   └─ Pipeline.finish                            Pipeline.swift
+   └─ FramePipeline.finish                            App/FramePipeline.swift
       ├─ store.latest = frame
-      ├─ Analyzer.analyze(_:using:)              Analyzer.swift
+      ├─ DepthSceneAnalyzer.analyze(_:using:)              Analysis/DepthSceneAnalyzer.swift
       │  └─ SVStereoCore.analyzeDepth:into:      → stereo_analyze → analyze.cpp + sample.cpp
-      ├─ Pipeline.timings(of:) → FrameReport(kind / timings)
-      └─ publish → AppModel.apply(_ r:)          AppModel.swift
+      ├─ FramePipeline.timings(of:) → FrameReport(kind / timings)
+      └─ publish → AppModel.apply(_ r:)          App/AppModel.swift
 ```
 
 **显示（MTKView 每帧）**
 
 ```
-Renderer.draw(in:)                Renderer.swift
+MetalSceneRenderer.draw(in:)                Rendering/MetalSceneRenderer.swift
 ├─ uploadLabels(model.analysis)   → labelTex.replace
 ├─ encode(...)                    → displayFragment（标准模式 = mode 0，只贴相机图）
-└─ AppModel.captureTarget()       AppModel.swift   （没拍照没录像时立刻 nil）
+└─ AppModel.captureTarget()       App/AppModel.swift   （没拍照没录像时立刻 nil）
 
-OverlayView(state:)               OverlayView.swift（准星读数/面块框/点选气泡）
-HUD(state:)                       CaptureScreen.swift
+OverlayView(state:)               UI/OverlayView.swift（准星读数/面块框/点选气泡）
+HUD(state:)                       UI/CaptureScreen.swift
 ```
 
 标准模式只是 `ViewMode.standard`（默认值）→ `shaderIndex == 0`，无额外分支。
@@ -228,11 +267,11 @@ HUD(state:)                       CaptureScreen.swift
 ### 4.2 打开诊断界面
 
 ```
-SidePanel 按钮                    CaptureScreen.swift   showDiagnostics = true
-└─ ContentView 的 .sheet          ContentView.swift
-   ├─ 取数：AppModel.diagnostics   AppModel.swift        （只读快照，值类型）
-   │  ← gpuReport(kind/timings) ← AppModel.apply(_ r: FrameReport) ← Pipeline.timings(of:)
-   └─ DiagnosticsScreen(snapshot:onDismiss:)   DiagnosticsScreen.swift
+SidePanel 按钮                    UI/CaptureScreen.swift   showDiagnostics = true
+└─ RootView 的 .sheet             UI/RootView.swift
+   ├─ 取数：AppModel.diagnostics   App/AppModel.swift        （只读快照，值类型）
+   │  ← gpuReport(kind/timings) ← AppModel.apply(_ r: FrameReport) ← FramePipeline.timings(of:)
+   └─ DiagnosticsScreen(snapshot:onDismiss:)   UI/DiagnosticsScreen.swift
       ├─ 概览 / GPU 内存：直接读 snapshot
       ├─ 各阶段表：ForEach(PipelineKind.rows(timings))   文案在诊断页里
       └─ Done → onDismiss → showDiagnostics = false
@@ -243,10 +282,10 @@ SidePanel 按钮                    CaptureScreen.swift   showDiagnostics = true
 ### 4.3 打开设置界面 → 改任意参数
 
 ```
-SidePanel 按钮                    CaptureScreen.swift   showSettings = true
-└─ ContentView 的 .sheet          ContentView.swift
+SidePanel 按钮                    UI/CaptureScreen.swift   showSettings = true
+└─ RootView 的 .sheet             UI/RootView.swift
    ├─ 进参：AppModel.draft / .device / .overlayAlpha
-   └─ SettingsScreen(draft:device:overlayAlpha:intents:onDismiss:)   SettingsScreen.swift
+   └─ SettingsScreen(draft:device:overlayAlpha:intents:onDismiss:)   UI/SettingsScreen.swift
 
 界面构建
 └─ SVParameterTable.allParameters()   Bridge → stereo_param_count / stereo_param_table → params.cpp
@@ -259,7 +298,7 @@ SidePanel 按钮                    CaptureScreen.swift   showSettings = true
    例外：overlay_alpha → SettingsIntents.setOverlayAlpha → AppModel.overlayAlpha（即时生效）
 
 点 Apply
-└─ SettingsIntents.apply(draft) → AppModel.apply(_ d: SettingsDraft)   AppModel.swift
+└─ SettingsIntents.apply(draft) → AppModel.apply(_ d: SettingsDraft)   App/AppModel.swift
    ├─ 写 10 个 private(set) 属性
    └─ **一次** push{...} 写进 PipelineSettings（不是 11 个 didSet 各推一次）
 
@@ -280,7 +319,7 @@ BGRA 双帧 ─GPU rectify→ 640×360 左右图 ─Metal SGM→ 视差 ─toDep
                                                               │
                         C++ analyze（网格+连通域+分位数）──────┴→ Analysis/Blobs/labels/中心读数
                                                               │
-                                             Renderer（着色/点云）+ OverlayView + HUD
+                                             MetalSceneRenderer（着色/点云）+ OverlayView + HUD
 ```
 
 ## 6. 评审时值得怀疑的地方（供删减参考）
@@ -290,13 +329,13 @@ BGRA 双帧 ─GPU rectify→ 640×360 左右图 ─Metal SGM→ 视差 ─toDep
 | 1 | `stereo_process_frame` + `SVFrameRequest`/`SVFrameTimings` + `-processFrame:` | **Swift 侧零调用**，只有 `frame_test` 与非 Apple 前端会用 | iOS 上要不要留？若将来做"全 CPU 后端"或 Qt 前端，它是入口；只服务 iOS 就是纯死代码（约 350 行 C++/桥接） |
 | 2 | `stereo_calibrate`（CPU 全流水线版） | 只有测试用；iOS 走 `stereo_calibrate_search` + GPU 打分（CPU 版 640×360 实测 3.4 s） | 只保留 `_search` 可删 ~120 行，但会失去"无 GPU 平台也能标定" |
 | 3 | 块匹配后端 `Matcher.block` | `Shaders.metal` 的 `match` kernel + `Engine/Matching/MetalBlockMatcher.swift`；**同时被标定的 GPU 打分复用** | 后端还用得上吗？砍它要先把标定打分换成别的代价函数 |
-| 4 | 两条系统深度分支 | `DepthSource.apple`/`.lidar` + `Engine/Depth/SystemDepthProcessor.swift`（~55 行）+ `CameraController.makeDepth`（~45 行） | 如果只用自研双目，整条可删 |
-| 5 | `CalibrationSource.calibration(of:)` / `.extrinsics(from:to:)` | 只在 `rig()` 里各用一次；每帧真正用的是 `intrinsics(of:fov:size:)` | 三者能否合一 |
+| 4 | 两条系统深度分支 | `DepthSource.apple`/`.lidar` + `Engine/Depth/SystemDepthProcessor.swift`（~55 行）+ `CameraSessionController.makeDepth`（~45 行） | 如果只用自研双目，整条可删 |
+| 5 | `CameraCalibrationReader.calibration(of:)` / `.extrinsics(from:to:)` | 只在 `rig()` 里各用一次；每帧真正用的是 `intrinsics(of:fov:size:)` | 三者能否合一 |
 | 6 | 双份"视差后"实现 | `stereo_process_frame` 内部调 `to_depth`/`unrectify`，iOS 的 `CppDepthProcessor` 调 `depthFromDisparity`+`unrectifyDepth`（同一对函数、两次调用） | 可合并成 `stereo_process_disparity`（省一次 malloc + 一次跨桥）；FAQ Q18 有分析 |
 | 7 | `core/tests/` 2351 行 | 不是运行时代码，但它是"改 C++ 不出错"的唯一保障（**iOS 侧没有任何测试**） | 删测试 = 放弃回归保护 |
-| 8 | `Renderer` 的矩阵工具 | `perspective`/`translate`/`rotateX/Y/Z`（~25 行）只服务点云视图 | 值得留 |
+| 8 | `MetalSceneRenderer` 的矩阵工具 | `perspective`/`translate`/`rotateX/Y/Z`（~25 行）只服务点云视图 | 值得留 |
 | 9 | `tools/` 下的脚本 | `sgm_ref.py`+`gen_golden.py` 是金标准的来源（有用）；`viewer.html` / `make_demo_export.py` 用途不明 | 后两个确认没人用可删 |
-| 10 | 文档 | `test.md` 981 行（过程记录）、`FAQ.md` 438 行、`ARCHITECTURE.md`、`docs/engine-backend-{baseline,refactor}.md`；已删除无引用的 24 MB 演示素材（`demo.gif` / `demo.mp4` / `get_gif.py` / `self-logo.png`） | 过程文档按需留；两份 engine 文档是这次后端拆分的唯一说明 |
+| 10 | 文档 | `test.md` 981 行（过程记录）、`FAQ.md`、`ARCHITECTURE.md`、`docs/engine-backend-{baseline,refactor}.md`、`stereovision_agent.md`（目录整理方案）；已删除无引用的 24 MB 演示素材（`demo.gif` / `demo.mp4` / `get_gif.py` / `self-logo.png`） | 过程文档按需留；两份 engine 文档 + 目录方案是这次重构的唯一说明 |
 
 **已核实"无引用"并已删除的东西**：`docs/demo.gif`、`docs/demo.mp4`、`docs/get_gif.py`、`docs/self-logo.png`（旧 README 的演示素材，删前确认 md / 代码里零引用，共 24 MB）；本地构建残留（`build/gifwork`、`build/artifacts`、`build/core-ci` 等，已忽略不入库）。代码侧之前清掉的 `DisplayOrientation.inverse`、`CameraCalibration.role/referenceSize`、`CameraRole`、`runCoreSelfTest`、`StereoCore` target 都已不在。
 
@@ -304,7 +343,12 @@ BGRA 双帧 ─GPU rectify→ 640×360 左右图 ─Metal SGM→ 视差 ─toDep
 
 ```bash
 # Swift 里是否还有逐像素循环（期望 0）
-grep -rn "for .* in 0\.\.<" StereoVision/*.swift
+grep -rn "for .* in 0\.\.<" --include='*.swift' StereoVision/
+
+# 目录红线（三条都期望空）
+grep -rnE "import (AVFoundation|MetalKit)|StereoEngine|SVStereoCore" StereoVision/UI/
+grep -rnE "import (SwiftUI|AVFoundation)" StereoVision/Contracts/
+grep -rnE "\b(CameraController|CalibrationSource|Analyzer|Renderer)\b" StereoVision/
 
 # 某个 Swift 符号还有没有引用
 grep -rn "符号名" StereoVision/
@@ -337,8 +381,8 @@ Windows 上没有 Swift/Xcode 工具链：本地只能跑 C++ 测试和语法级
 | `FAQ.md` | 为什么这样分层、算法分工、常见疑问 |
 | `docs/engine-backend-baseline.md` | 后端拆分**前**的调用关系、线程、资源生命周期、计时口径（对照基线） |
 | `docs/engine-backend-refactor.md` | 拆分**后**的迁移映射、等价性说明、真机回归清单 |
-| `STEREO_ENGINE_BACKEND_REFACTOR_PLAN.md`（仓库根） | 这次改造的执行方案（已实施） |
+| `stereovision_agent.md` | `StereoVision/` 目录与命名规范（本次目录整理的验收依据） |
 | `test.md` | 历史过程记录（按需留） |
 | `tools/README.md` | Python 孪生实现、金标准生成、viewer |
 
-App 运行时文件见 §3（`Engine/` 细分见 §3.2.1），C++ 见 §1，桥接见 §2。
+App 运行时文件见 §3（`Engine/` 细分见 §3.2.5），C++ 见 §1，桥接见 §2。

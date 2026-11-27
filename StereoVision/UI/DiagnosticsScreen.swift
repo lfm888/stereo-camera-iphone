@@ -30,7 +30,7 @@ struct StageDiag: Identifiable, Sendable {
 
 /// 每条管线在诊断页上叫什么、有哪几个阶段、各自跑在哪里。
 ///
-/// 以前这张表由 Pipeline 每帧生成（文案散在后台管线里）；现在管线只交出数字
+/// 以前这张表由 FramePipeline 每帧生成（文案散在后台管线里）；现在管线只交出数字
 /// （`StageTimings`）和走了哪条路（`PipelineKind`），文案归显示层，统一放在这里。
 /// 以后改某个阶段的叫法或备注，只需要改这一个文件。
 extension PipelineKind {
@@ -73,7 +73,7 @@ extension PipelineKind {
     }
 }
 
-// GpuReport / DiagnosticsSnapshot 的定义在 Contracts.swift。
+// GpuReport / DiagnosticsSnapshot 的定义在 Contracts/UIContracts.swift。
 
 /// 后台诊断页：把「这一帧的每个阶段是谁算的」列出来。
 ///

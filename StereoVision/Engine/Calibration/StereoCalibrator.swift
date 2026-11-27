@@ -10,7 +10,7 @@
 //  而"该试哪些候选、怎么细化、怎么比较"才是算法，那部分在 C++ 里。
 //
 //  打分固定用 `resources.scoringSlot`（slots[0]），与改造前一致。
-//  标定和正常帧处理都在 CameraController 的 dataQueue 上串行执行，
+//  标定和正常帧处理都在 CameraSessionController 的 dataQueue 上串行执行，
 //  所以不会和当帧轮换到的 slot 冲突（见 docs/engine-backend-baseline.md §2）。
 //
 

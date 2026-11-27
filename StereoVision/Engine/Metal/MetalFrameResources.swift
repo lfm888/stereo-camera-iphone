@@ -15,7 +15,7 @@ import Metal
 /// 深度图目标：一块共享 MTLBuffer + 一张 r32Float 纹理（同一块内存的两个视图）。
 ///
 /// 之所以是共享内存：GPU 路径由 `unrectifyDepth` kernel 写，C++ 混合路径由
-/// `SVStereoCore.unrectifyDepth` 直接写；之后 Analyzer（准星/连通域）、点选测距、
+/// `SVStereoCore.unrectifyDepth` 直接写；之后 DepthSceneAnalyzer（准星/连通域）、点选测距、
 /// 导出都在 CPU 上读同一块。行跨度按设备的最小线性纹理对齐补齐，`bytesPerRow` 是字节。
 final class DepthTarget {
     let buffer: MTLBuffer

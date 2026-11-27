@@ -3,7 +3,7 @@
 //  StereoVision
 //
 //  "把已矫正的一对图变成 C++ 能读的一块内存" —— 这个适配步骤是**显式**的，
-//  不藏在通用 matcher 里（见 STEREO_ENGINE_BACKEND_REFACTOR_PLAN.md §4.2）。
+//  不藏在通用 matcher 里（见 docs/engine-backend-refactor.md 的「读回」一节）。
 //
 //  两种源的格式不一样，所以左右各自带格式声明（由 CppSGMMatcher 使用）：
 //    左：rectify 的输出 CVPixelBuffer，32BGRA，行跨度由 CoreVideo 对齐

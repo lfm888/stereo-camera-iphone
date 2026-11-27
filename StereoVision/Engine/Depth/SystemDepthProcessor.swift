@@ -48,7 +48,7 @@ final class SystemDepthProcessor {
                                    width: w, height: h, minZ: settings.minZ, maxZ: settings.maxZ)
         CVPixelBufferUnlockBaseAddress(map, .readOnly)
 
-        let K = CalibrationSource.depthIntrinsics(data, width: w, height: h, fovDeg: fovDeg)
+        let K = CameraCalibrationReader.depthIntrinsics(data, width: w, height: h, fovDeg: fovDeg)
         return StereoFrame(color: tex, right: nil, target: target, K: K, image: pb,
                            gpuMs: 0, baselineMM: 0, retained: [cv])
     }

@@ -10,8 +10,10 @@ import os
 //   2. 把相机 / 管线 / 渲染器连起来
 //   3. 实现 CaptureIntents / SettingsIntents（界面唯一可写入口）
 //
-// 类型定义（ViewMode / SettingsDraft / CaptureUIState / 各种 Intents / 诊断快照）在 Contracts.swift，
-// 每帧在后台跑的管线（PipelineSettings / FrameReport / FrameStore / Pipeline）在 Pipeline.swift。
+// 类型定义分在 Contracts/：
+//   Contracts/UIContracts.swift       ViewMode 以外的界面快照 + 意图（CaptureUIState / SettingsDraft / …）
+//   Contracts/PipelineContracts.swift 共享词汇 + 管线数据结构（PipelineSettings / FrameReport / FrameStore）
+// 每帧在后台跑的调度类在 App/FramePipeline.swift。
 
 @MainActor
 @Observable
@@ -111,15 +113,15 @@ final class AppModel {
                             depthSize: depthSize)
     }
 
-    @ObservationIgnored let pipeline: Pipeline
-    @ObservationIgnored let renderer: Renderer
+    @ObservationIgnored let pipeline: FramePipeline
+    @ObservationIgnored let renderer: MetalSceneRenderer
     /// 主线程专用的 C++ context：点选测距在主线程跑，而 pipeline 的 context 在相机数据队列上跑。
     /// 两个分开是为了不并发访问同一个 stereo_context（它不是线程安全的）。
     @ObservationIgnored private let queryCore = SVStereoCore(maxDisparity: 64, p1: 8, p2: 96,
                                                            uniqueness: 0.1, lrCheck: true)
     @ObservationIgnored private var orientationObservers: [NSObjectProtocol] = []
-    let capture = Capture()
-    @ObservationIgnored private let camera = CameraController()
+    let capture = MediaExportManager()
+    @ObservationIgnored private let camera = CameraSessionController()
 
     init() {
         // 引擎参数的初值来自 C++ 的参数表（与设置页同一份）
@@ -137,8 +139,8 @@ final class AppModel {
 
         let device = MTLCreateSystemDefaultDevice()!
         let engine = StereoEngine(device: device)
-        pipeline = Pipeline(engine: engine)
-        renderer = Renderer(device: device, store: pipeline.store)
+        pipeline = FramePipeline(engine: engine)
+        renderer = MetalSceneRenderer(device: device, store: pipeline.store)
         renderer.model = self
 
         let p = pipeline
@@ -247,9 +249,9 @@ final class AppModel {
         return orientation.isPortrait ? (s, l) : (l, s)
     }
 
-    /// Renderer 每帧问一次：这一帧要不要额外烧一张照片 / 录一帧？
+    /// MetalSceneRenderer 每帧问一次：这一帧要不要额外烧一张照片 / 录一帧？
     ///
-    /// 需要的数据由这里组装好传下去 —— Capture 不再反向持有 AppModel。
+    /// 需要的数据由这里组装好传下去 —— MediaExportManager 不再反向持有 AppModel。
     /// 空闲时（没拍照、没录像）直接返回 nil，连快照都不构造。
     func captureTarget() -> (CVPixelBuffer, @MainActor (CVPixelBuffer) -> Void)? {
         if capture.photoPending, let frame = pipeline.store.latest {

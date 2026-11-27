@@ -6,11 +6,11 @@
 //
 //  边界：
 //    ✅ 从 CMSampleBuffer 取 CVPixelBuffer → MTLTexture（经 CVMetalTextureCache）
-//    ✅ 读这一帧的内参（CalibrationSource.intrinsics，第 1 步）
+//    ✅ 读这一帧的内参（CameraCalibrationReader.intrinsics，第 1 步）
 //    ✅ 持有已配置的 CameraRig（外参来自 AVCaptureDevice.extrinsicMatrix）
 //    ❌ 任何几何推导 —— 那是 StereoGeometrySolver → core/src/geometry.cpp
 //
-//  `rig` 由 CameraController 的 session 队列写入（`onDevices`），由相机数据队列读取。
+//  `rig` 由 CameraSessionController 的 session 队列写入（`onDevices`），由相机数据队列读取。
 //  改造前就是这个情形（没有额外同步），本轮不改线程模型，只把状态收进这一处。
 //
 
@@ -40,9 +40,9 @@ final class FrameInputProvider {
         self.context = context
     }
 
-    /// 相机会话建好后由 `CameraController.onDevices` 调用。
+    /// 相机会话建好后由 `CameraSessionController.onDevices` 调用。
     func configure(wide: AVCaptureDevice, ultra: AVCaptureDevice) {
-        rig = CalibrationSource.rig(wide: wide, ultra: ultra)
+        rig = CameraCalibrationReader.rig(wide: wide, ultra: ultra)
     }
 
     var hasExtrinsics: Bool { rig?.hasExtrinsics ?? false }
@@ -66,8 +66,8 @@ final class FrameInputProvider {
                            keep: [wcv, ucv])
     }
 
-    /// 读一帧的内参。第 1 步的实际入口是 Calibration.swift，这里只补上角色与视场角。
+    /// 读一帧的内参。第 1 步的实际入口是 Camera/CameraCalibrationReader.swift，这里只补上角色与视场角。
     private func intrinsics(of sb: CMSampleBuffer, fov: Float, size: SIMD2<Float>) -> Intrinsics {
-        CalibrationSource.intrinsics(of: sb, fov: fov, size: size).intrinsics
+        CameraCalibrationReader.intrinsics(of: sb, fov: fov, size: size).intrinsics
     }
 }

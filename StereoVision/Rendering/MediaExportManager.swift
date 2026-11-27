@@ -1,3 +1,13 @@
+//
+//  Rendering/MediaExportManager.swift
+//  StereoVision
+//
+//  导出层：拍照（png + depth_mm + meta.json + ply）、录像、叠层画面烘焙。
+//
+//  不持有 AppModel：需要的东西（帧、分析、叠层快照、元数据、尺寸）全由调用方传进来，
+//  这样“导出”与“状态聚合”不会互相依赖。兼容的界面快照在 Contracts/UIContracts.swift。
+//
+
 import AVFoundation
 import CoreImage
 import ImageIO
@@ -8,7 +18,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 @Observable
-final class Capture {
+final class MediaExportManager {
     private(set) var isRecording = false
     private(set) var recordingStart: Date?
     private(set) var message: String?
@@ -29,7 +39,7 @@ final class Capture {
 
     /// 拍一张照片：返回待渲染的缓冲，以及渲染完的收尾。
     ///
-    /// 需要的东西全部由调用方传进来 —— Capture 不再反向持有 AppModel。
+    /// 需要的东西全部由调用方传进来 —— MediaExportManager 不再反向持有 AppModel。
     func beginPhoto(frame: StereoFrame, analysis: Analysis, overlay: CaptureUIState,
                     metadata: [String: Any],
                     size: (w: Int, h: Int)) -> (CVPixelBuffer, @MainActor (CVPixelBuffer) -> Void)? {
@@ -184,7 +194,7 @@ struct Snapshot: @unchecked Sendable {
     let meta: [String: Any]
 }
 
-extension Capture {
+extension MediaExportManager {
     nonisolated static func export(_ s: Snapshot, _ view: CGImage) throws -> URL {
         let f = s.frame
         let docs = try FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)

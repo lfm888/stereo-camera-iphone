@@ -1,3 +1,16 @@
+//
+//  Camera/CameraSessionController.swift
+//  StereoVision
+//
+//  AVFoundation 会话层：建双摄 / 系统深度两种 session，选 format，把同步输出
+//  回调给 App/FramePipeline。
+//
+//  这里只做采集与参数传递，不做几何、不碰 Metal：
+//    双摄多机       → onStereo(wide, ultra)  → FramePipeline.stereo
+//    系统深度       → onDepth(video, depth)  → FramePipeline.depthData
+//    设备就绪       → onDevices(wide, ultra) → StereoEngine.configure（读 CameraRig）
+//
+
 import AVFoundation
 
 enum DepthSource: String, CaseIterable, Identifiable {
@@ -42,7 +55,7 @@ enum DepthSource: String, CaseIterable, Identifiable {
     }
 }
 
-final class CameraController: NSObject, AVCaptureDataOutputSynchronizerDelegate, @unchecked Sendable {
+final class CameraSessionController: NSObject, AVCaptureDataOutputSynchronizerDelegate, @unchecked Sendable {
     struct Failure: LocalizedError {
         let errorDescription: String?
         init(_ s: String) { errorDescription = s }

@@ -10,7 +10,7 @@
 //          → RectificationBackend    MetalRectifier
 //          → MatchingBackend         MetalSGMMatcher / MetalBlockMatcher / CppSGMMatcher
 //          → DepthBackend            MetalDepthProcessor / CppDepthProcessor
-//          → StereoFrame             → Pipeline → Analyzer → FrameReport
+//          → StereoFrame             → FramePipeline → DepthSceneAnalyzer → FrameReport
 //
 //  这个文件里**没有** kernel 调度细节（在各 backend）、**没有** C++ 指针细节
 //  （在 CppSGMMatcher / CppDepthProcessor / CPUImageReadback）、也没有 PSO/纹理的创建
@@ -80,7 +80,7 @@ final class StereoEngine: @unchecked Sendable {
         cppDepth = c.map { CppDepthProcessor(core: $0) }
     }
 
-    /// 相机会话建好后由 `CameraController.onDevices` 调用。
+    /// 相机会话建好后由 `CameraSessionController.onDevices` 调用。
     func configure(wide: AVCaptureDevice, ultra: AVCaptureDevice) {
         inputProvider.configure(wide: wide, ultra: ultra)
     }

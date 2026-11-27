@@ -5,11 +5,11 @@ import SwiftUI
 /// 它只拿两样东西：
 ///   `CaptureUIState`   只读快照（值类型，改不了状态）
 ///   `CaptureIntents`   唯一可写入口
-/// 平台对象（`Renderer`）单独传，因为它不是"状态"而是 MTKView 的 target。
+/// 平台对象（`MetalSceneRenderer`）单独传，因为它不是"状态"而是 MTKView 的 target。
 struct CaptureScreen: View {
     let state: CaptureUIState
     let intents: CaptureIntents
-    let renderer: Renderer
+    let renderer: MetalSceneRenderer
     @Binding var showSettings: Bool
     @Binding var showDiagnostics: Bool
 

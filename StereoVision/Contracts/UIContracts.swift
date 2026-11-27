@@ -1,77 +1,24 @@
+//
+//  Contracts/UIContracts.swift
+//  StereoVision
+//
+//  界面与状态之间**唯一**的共同语言（只读快照 + 意图协议）。
+//
+//    CaptureUIState / DiagnosticsSnapshot / DeviceInfo  —— 只读入参（值类型，界面改不了状态）
+//    CaptureIntents / SettingsIntents                    —— 唯一可写入口
+//  于是"诊断页不会偷改状态"是编译器保证的，不靠约定。
+//
+//  红线（见 stereovision_agent.md §0）：本目录不允许出现 SwiftUI / AVFoundation 的 import。
+//  界面用到的枚举（ViewMode / Matcher / PipelineKind）在 PipelineContracts.swift。
+//
+//  三个界面只依赖 SwiftUI，拿到的都是这里的值类型：
+//    UI/CaptureScreen.swift · UI/SettingsScreen.swift · UI/DiagnosticsScreen.swift
+//
+
 import CoreGraphics
 import Foundation
 
-// 本文件只放"类型定义"，不含任何逻辑：
-//   1. 共享词汇        ViewMode / Matcher / DisplayOrientation
-//   2. 界面 ↔ 状态契约  SettingsDraft / DeviceInfo / CaptureUIState / CaptureIntents / SettingsIntents
-//   3. 诊断快照        GpuReport / DiagnosticsSnapshot
-//
-// 原来这些都挤在 AppModel.swift 里。拆出来之后：
-//   - AppModel.swift  只管"状态聚合 + 接线 + 意图实现"
-//   - Pipeline.swift  只管"每帧在后台怎么跑"
-//   - 本文件          是两边与界面之间的共同语言
-//
-// 三个界面只认这几样东西：
-//   CaptureUIState / DiagnosticsSnapshot / DeviceInfo  —— 只读入参（值类型，界面改不了状态）
-//   CaptureIntents / SettingsIntents                    —— 唯一可写入口
-// 于是"诊断页不会偷改状态"是编译器保证的，不靠约定。
-
-// MARK: - 共享词汇
-
-enum ViewMode: Int, CaseIterable, Identifiable {
-    case standard, depth, overlay, disparity, stereoPair, anaglyph, segmentation, pointCloud
-    var id: Self { self }
-
-    var title: String {
-        switch self {
-        case .standard: "Standard"
-        case .depth: "Depth map"
-        case .overlay: "Overlay"
-        case .disparity: "Disparity"
-        case .stereoPair: "Rectified pair"
-        case .anaglyph: "Anaglyph"
-        case .segmentation: "3D segmentation"
-        case .pointCloud: "Point cloud"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .standard: "camera"
-        case .depth: "flame"
-        case .overlay: "square.2.layers.3d"
-        case .disparity: "circle.lefthalf.filled"
-        case .stereoPair: "rectangle.split.2x1"
-        case .anaglyph: "eyeglasses"
-        case .segmentation: "square.grid.3x3.fill"
-        case .pointCloud: "cube.transparent"
-        }
-    }
-
-    var needsStereoPair: Bool { self == .stereoPair || self == .anaglyph }
-
-    /// 显式映射，不用 rawValue：删过枚举项之后 rawValue 会前移，而着色器里的
-    /// mode 是固定编号（Shaders.metal 的 displayFragment）。之前用
-    /// `min(rawValue, 7)` 靠"Bird's-eye 恰好是 7"凑数，删掉它就错位了。
-    var shaderIndex: Int32 {
-        switch self {
-        case .standard: 0
-        case .depth: 1
-        case .overlay: 2
-        case .disparity: 3
-        case .stereoPair: 4
-        case .anaglyph: 5
-        case .segmentation: 6
-        case .pointCloud: 7   // 不走 displayFragment，Renderer 里单独分支
-        }
-    }
-}
-
-enum Matcher: String, CaseIterable, Identifiable, Sendable {
-    case sgm, block
-    var id: Self { self }
-    var title: String { self == .sgm ? "SGM 4 paths" : "Block matching 5×5" }
-}
+// MARK: - 显示方向
 
 /// 显示方向：手机怎么拿，屏幕上就把画面转多少。
 ///
