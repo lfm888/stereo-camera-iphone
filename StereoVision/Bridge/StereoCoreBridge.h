@@ -24,6 +24,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 分析结果容器（定义在本文件后面）。这里先前置声明，因为 SVStereoCore 的方法要用它。
 @class SVAnalysis;
+@class SVFrameRequest;
+@class SVFrameTimings;
 @class SVCalibration;
 
 /// 像素字节顺序，与 core/include/stereo/stereo_c_api.h 的 enum stereo_format 一一对应。
@@ -119,6 +121,28 @@ typedef NS_ENUM(NSInteger, SVImageFormat) {
              dstStride:(NSInteger)dstStride
                dstWidth:(NSInteger)dstWidth
               dstHeight:(NSInteger)dstHeight;
+
+/// 第 2..5 步的 CPU 全流水线（对应 core 的 `stereo_process_frame`）。
+///
+/// Swift 的 iOS 路径**不用**它：那条是"GPU 矫正 + C++ 匹配/深度"，因为矫正后的
+/// 一对纹理还要给 Rectified pair / Anaglyph 视图用。这个方法是给非 Apple 前端
+/// （Windows/Linux/Qt）和将来可能的"全 CPU"后端准备的。
+///
+/// - left/right：**原始未矫正**图（任意 `SVImageFormat`），内部会转成 BGRA8。
+/// - disparity 可为 NULL（不要视差）；depth 必填；analysis 内部的缓冲会按需扩容。
+- (BOOL)processFrame:(const uint8_t *)left
+          leftStride:(NSInteger)leftStride
+          leftFormat:(SVImageFormat)leftFormat
+               right:(const uint8_t *)right
+         rightStride:(NSInteger)rightStride
+         rightFormat:(SVImageFormat)rightFormat
+             request:(SVFrameRequest *)request
+           disparity:(nullable float *)disparity
+          dispStride:(NSInteger)dispStride
+               depth:(float *)depth
+         depthStride:(NSInteger)depthStride
+            analysis:(SVAnalysis *)analysis
+             timings:(nullable SVFrameTimings *)timings;
 
 // ---------------------------------------------------------------------------
 // 深度图查询与分析（准星读数 / 点选测距 / 3D segmentation）
@@ -270,8 +294,10 @@ typedef struct SVBlobRecord {
 @property (nonatomic) simd_float3x3 rotation;
 @property (nonatomic) simd_float3 translation;
 
-/// 原始图宽（内参是按它给的，工作分辨率由 C++ 按比例缩放）。
+/// 原始图尺寸（内参是按它给的，工作分辨率由 C++ 按比例缩放）。
+/// `sourceHeight` 只在 `stereo_process_frame` 里用得到——那条路要把原始图的重采样交给 C++。
 @property (nonatomic) float sourceWidth;
+@property (nonatomic) float sourceHeight;
 @property (nonatomic) NSInteger workWidth;
 @property (nonatomic) NSInteger workHeight;
 /// 交换基线方向（外参取逆）。
@@ -303,6 +329,92 @@ typedef struct SVBlobRecord {
 @property (nonatomic, readonly) float baselineMM;
 /// 基线相对宽相机 x 轴的角度（度）。对角双摄约 ±45°。
 @property (nonatomic, readonly) float baselineDegrees;
+
+@end
+
+
+// ---------------------------------------------------------------------------
+// 参数描述表（core/src/params.cpp 的那张表，界面据此生成滑杆）
+// ---------------------------------------------------------------------------
+
+/// 控件类型。命名避开 Swift 关键字（enum/switch 之类会被导入成反引号名字）。
+typedef NS_ENUM(NSInteger, SVParamKind) {
+    SVParamKindNumber  = 0,   ///< 连续浮点 → 滑杆
+    SVParamKindInteger = 1,   ///< 整数 → 滑杆（step 通常是 1 或 32）
+    SVParamKindFlag    = 2,   ///< 开关 → Toggle
+    SVParamKindChoice  = 3,   ///< 枚举 → Picker（选项见 enumLabels）
+};
+
+/// 一条参数描述。数值与字符串直接来自 C++ 的参数表，Swift 侧不再各写一份。
+@interface SVParameter : NSObject
+
+@property (nonatomic, readonly) NSInteger identifier;
+/// 稳定标识（"max_disparity"、"min_z"…）。界面用它读写 `SettingsDraft`。
+@property (nonatomic, readonly, copy) NSString *key;
+@property (nonatomic, readonly, copy) NSString *label;
+/// 分组："depth" / "matching" / "display"
+@property (nonatomic, readonly, copy) NSString *group;
+@property (nonatomic, readonly) SVParamKind kind;
+@property (nonatomic, readonly) float minValue;
+@property (nonatomic, readonly) float maxValue;
+@property (nonatomic, readonly) float step;
+@property (nonatomic, readonly) float defaultValue;
+@property (nonatomic, readonly, copy) NSString *unit;
+/// kind == Choice 时的选项标签（已按 '|' 拆开）；其它类型是空数组。
+@property (nonatomic, readonly, copy) NSArray<NSString *> *enumLabels;
+
+@end
+
+/// 参数表的访问入口（结果缓存，只在第一次调用时构造）。
+@interface SVParameterTable : NSObject
+
+/// 全部 11 条，顺序就是希望界面上出现的顺序。
++ (NSArray<SVParameter *> *)allParameters;
+
+/// 按 key 查；找不到返回 nil。
++ (nullable SVParameter *)lookup:(NSString *)key;
+
+@end
+
+// ---------------------------------------------------------------------------
+// stereo_process_frame 的输入/输出
+// ---------------------------------------------------------------------------
+
+/// 全流水线的标量输入。图像与输出缓冲走 `processFrame:` 的参数。
+@interface SVFrameRequest : NSObject
+
+/// 第 2 步的几何（内参/外参/工作分辨率/flip/dy）。
+@property (nonatomic, strong) SVRectifyInput *geometry;
+
+@property (nonatomic) NSInteger maxDisparity;
+@property (nonatomic) NSInteger p1;
+@property (nonatomic) NSInteger p2;
+@property (nonatomic) float uniqueness;
+@property (nonatomic) BOOL lrCheck;
+
+@property (nonatomic) float minZ;
+@property (nonatomic) float maxZ;
+
+/// 准星矩形（归一化 x0,y0,x1,y1）+ 分位数。`computeCenter = NO` 时不计算。
+@property (nonatomic) simd_float4 centerRect;
+@property (nonatomic) float centerQ;
+@property (nonatomic) BOOL computeCenter;
+
+/// 连通域分析参数（0 = 用 C++ 的默认值 24 / 40）。
+@property (nonatomic) NSInteger maxBlobs;
+@property (nonatomic) NSInteger minCells;
+
+@end
+
+/// 各阶段耗时（毫秒），诊断用。
+@interface SVFrameTimings : NSObject
+
+@property (nonatomic, readonly) double rectify;
+@property (nonatomic, readonly) double match;
+@property (nonatomic, readonly) double depth;
+@property (nonatomic, readonly) double unrectify;
+@property (nonatomic, readonly) double analyze;
+@property (nonatomic, readonly) double total;
 
 @end
 

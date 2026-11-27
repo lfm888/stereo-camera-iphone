@@ -16,21 +16,37 @@ import os
 // MARK: - 管线参数
 
 struct PipelineSettings: Sendable {
-    var matcher = Matcher.sgm
-    var lrCheck = true
-    var p1 = 8
-    var p2 = 96
-    var minZ: Float = 0.12
-    var maxZ: Float = 3
-    var uniqueness: Float = 0.1
-    var maxDisparity = 64
-    var yOffset: Float = 0
-    var flip = false
+    var matcher: Matcher
+    var lrCheck: Bool
+    var p1: Int
+    var p2: Int
+    var minZ: Float
+    var maxZ: Float
+    var uniqueness: Float
+    var maxDisparity: Int
+    var yOffset: Float
+    var flip: Bool
     var orient = DisplayOrientation.landscapeRight
     var calibrate = true
     /// true = 匹配交给 C++ 核心（CPU）；false = 走 Metal 的 SGM。
     /// 由 AppModel 依据 DepthSource 推入，不放进设置页的 picker。
     var cpuMatcher = false
+
+    /// 引擎参数的初值来自 **C++ 的参数表**（core/src/params.cpp）：
+    /// 以前这里、`SettingsDraft`、`stereo_config_default` 三处各写一份，容易走样。
+    init() {
+        let d = SettingsDraft()
+        matcher = d.matcher
+        lrCheck = d.lrCheck
+        p1 = Int(d.p1)
+        p2 = Int(d.p2)
+        minZ = d.minZ
+        maxZ = d.maxZ
+        uniqueness = d.uniqueness
+        maxDisparity = d.maxDisparity
+        yOffset = d.yOffset
+        flip = d.flip
+    }
 }
 
 // MARK: - 管线输出

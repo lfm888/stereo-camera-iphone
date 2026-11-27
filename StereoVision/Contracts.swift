@@ -141,16 +141,77 @@ enum DisplayOrientation: Int, Sendable, CaseIterable {
 /// 改动在点 Apply 之前不进管线：换 maxDisparity 会让 C++ context 重新分配缓冲区，
 /// 所以不能拖一下滑杆就生效。
 struct SettingsDraft {
-    var minZ: Float = 0.12
-    var maxZ: Float = 3
-    var uniqueness: Float = 0.1
-    var maxDisparity = 64
-    var matcher = Matcher.sgm
-    var lrCheck = true
-    var p1: Float = 8
-    var p2: Float = 96
-    var yOffset: Float = 0
-    var flip = false
+    var minZ: Float
+    var maxZ: Float
+    var uniqueness: Float
+    var maxDisparity: Int
+    var matcher: Matcher
+    var lrCheck: Bool
+    var p1: Float
+    var p2: Float
+    var yOffset: Float
+    var flip: Bool
+
+    /// 默认值来自 **C++ 的参数表**（core/src/params.cpp → SVParameterTable），
+    /// Swift 侧不再各写一份 —— 以前 `PipelineSettings`、这里、`stereo_config_default`
+    /// 三处各有一份默认值。
+    init() {
+        func d(_ key: String) -> Float { SVParameterTable.lookup(key)?.defaultValue ?? 0 }
+        func b(_ key: String) -> Bool { d(key) != 0 }
+        minZ = d("min_z")
+        maxZ = d("max_z")
+        uniqueness = d("uniqueness")
+        maxDisparity = Int(d("max_disparity"))
+        let m = Int(d("matcher"))
+        matcher = Matcher.allCases.indices.contains(m) ? Matcher.allCases[m] : .sgm
+        lrCheck = b("lr_check")
+        p1 = d("p1")
+        p2 = d("p2")
+        yOffset = d("y_offset")
+        flip = b("flip_baseline")
+    }
+}
+
+extension SettingsDraft {
+    /// 按 C++ 参数表的 key 读写。
+    ///
+    /// 设置界面用它把"表里的一条参数"直接接到控件上，于是**取值范围与步长只有表里一份**；
+    /// 枚举按 `Matcher.allCases` 的下标存取（顺序与表里的 enum_labels 一致）。
+    subscript(key key: String) -> Float? {
+        get {
+            switch key {
+            case "min_z": return minZ
+            case "max_z": return maxZ
+            case "uniqueness": return uniqueness
+            case "max_disparity": return Float(maxDisparity)
+            case "matcher": return Float(Matcher.allCases.firstIndex(of: matcher) ?? 0)
+            case "lr_check": return lrCheck ? 1 : 0
+            case "p1": return p1
+            case "p2": return p2
+            case "y_offset": return yOffset
+            case "flip_baseline": return flip ? 1 : 0
+            default: return nil
+            }
+        }
+        set {
+            guard let v = newValue else { return }
+            switch key {
+            case "min_z": minZ = v
+            case "max_z": maxZ = v
+            case "uniqueness": uniqueness = v
+            case "max_disparity": maxDisparity = Int(v)
+            case "matcher":
+                let i = Int(v)
+                matcher = Matcher.allCases.indices.contains(i) ? Matcher.allCases[i] : matcher
+            case "lr_check": lrCheck = v != 0
+            case "p1": p1 = v
+            case "p2": p2 = v
+            case "y_offset": yOffset = v
+            case "flip_baseline": flip = v != 0
+            default: break
+            }
+        }
+    }
 }
 
 /// 只读的设备/标定信息。

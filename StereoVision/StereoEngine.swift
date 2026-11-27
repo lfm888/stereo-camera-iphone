@@ -202,7 +202,8 @@ final class StereoEngine: @unchecked Sendable {
     /// 数学全部在 C++（core/src/geometry.cpp），这里只负责把第 1 步读到的内参/外参
     /// 装箱交给 SVRectification，再把结果换回本文件用的 simd 类型。
     /// 返回 nil 表示参数不可用（外参为零、尺寸非法），调用方应该丢掉这一帧。
-    func geometry(KW: Intrinsics, KU: Intrinsics, srcW: Float, flip: Bool, dy: Float) -> Geometry? {
+    func geometry(KW: Intrinsics, KU: Intrinsics, srcW: Float, srcH: Float,
+                  flip: Bool, dy: Float) -> Geometry? {
         guard let rig else { return nil }
         let input = SVRectifyInput()
         input.wideIntrinsics = SIMD4(KW.fx, KW.fy, KW.cx, KW.cy)
@@ -210,6 +211,7 @@ final class StereoEngine: @unchecked Sendable {
         input.rotation = rig.extrinsics.rotation
         input.translation = rig.extrinsics.translation
         input.sourceWidth = srcW
+        input.sourceHeight = srcH
         input.workWidth = Self.workW
         input.workHeight = Self.workH
         input.flip = flip
@@ -288,7 +290,7 @@ final class StereoEngine: @unchecked Sendable {
               let enc = cb.makeComputeCommandEncoder() else { return nil }
         slotIndex = (slotIndex + 1) % slots.count
         let slot = slots[slotIndex]
-        guard let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), flip: s.flip, dy: s.yOffset) else { return nil }
+        guard let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), srcH: Float(inp.wTex.height), flip: s.flip, dy: s.yOffset) else { return nil }
         encodeRectify(enc, inp.wTex, lTex, g.MW)
         encodeRectify(enc, inp.uTex, slot.right, g.MU)
         dispatch(enc, censusPSO, [lTex, slot.censusL])
@@ -328,7 +330,7 @@ final class StereoEngine: @unchecked Sendable {
 
         slotIndex = (slotIndex + 1) % slots.count
         let slot = slots[slotIndex]
-        guard let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), flip: s.flip, dy: s.yOffset) else { return nil }
+        guard let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width), srcH: Float(inp.wTex.height), flip: s.flip, dy: s.yOffset) else { return nil }
         let w = Self.workW, h = Self.workH
 
         // ---- 1) 矫正：GPU ----
@@ -417,7 +419,7 @@ final class StereoEngine: @unchecked Sendable {
     private func score(flipped: Bool, dy: Float, inp: Inputs, s: PipelineSettings) -> Float {
         let slot = slots[0]
         guard let g = geometry(KW: inp.KW, KU: inp.KU, srcW: Float(inp.wTex.width),
-                               flip: flipped, dy: dy),
+                               srcH: Float(inp.wTex.height), flip: flipped, dy: dy),
               let cb = queue.makeCommandBuffer(),
               let enc = cb.makeComputeCommandEncoder() else { return .infinity }
         encodeRectify(enc, inp.wTex, slot.right, g.MW)

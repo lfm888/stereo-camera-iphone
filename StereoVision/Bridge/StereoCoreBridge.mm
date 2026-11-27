@@ -55,6 +55,9 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
 
 // 内部写入口：只在 Bridge 里用，不暴露给 Swift（不写在公开头文件里）。
 @interface SVAnalysis ()
+/// 把内部缓冲扩到至少 count，返回可直接给 C++ 写的指针。
+- (stereo_blob *)resizeBlobs:(NSInteger)count;
+- (unsigned char *)resizeLabels:(NSInteger)count;
 @property (nonatomic, readwrite) NSInteger blobCount;
 @property (nonatomic, readwrite) NSInteger gridWidth;
 @property (nonatomic, readwrite) NSInteger gridHeight;
@@ -307,6 +310,7 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
     _rotation = matrix_identity_float3x3;
     _translation = simd_make_float3(0, 0, 0);
     _sourceWidth = 0;
+    _sourceHeight = 0;
     _workWidth = 0;
     _workHeight = 0;
     _flip = NO;
@@ -360,6 +364,18 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
 
 - (const void *)blobs { return _blobs.data(); }
 - (const void *)labels { return _labels.data(); }
+
+- (stereo_blob *)resizeBlobs:(NSInteger)count {
+    if (count < 0) count = 0;
+    _blobs.resize(static_cast<size_t>(count));
+    return _blobs.data();
+}
+
+- (unsigned char *)resizeLabels:(NSInteger)count {
+    if (count < 0) count = 0;
+    _labels.assign(static_cast<size_t>(count), 0);
+    return _labels.data();
+}
 
 /// 只在本文件内用：把 C 的面块数组翻译成 ObjC 侧的结构（字段逐个拷，不靠"恰好对齐"）。
 - (void)fillFromCBlobs:(const stereo_blob *)src count:(NSInteger)count {
@@ -513,6 +529,227 @@ float sv_calibrate_score(void *user, int flip, float dy) {
     out.yOffset = r.dy;
     out.score = r.score;
     return out;
+}
+
+@end
+
+// MARK: - 参数描述表
+
+@interface SVParameter ()
+- (instancetype)initWithDesc:(const stereo_param_desc *)desc;
+@property (nonatomic, readwrite) NSInteger identifier;
+@property (nonatomic, readwrite, copy) NSString *key;
+@property (nonatomic, readwrite, copy) NSString *label;
+@property (nonatomic, readwrite, copy) NSString *group;
+@property (nonatomic, readwrite) SVParamKind kind;
+@property (nonatomic, readwrite) float minValue;
+@property (nonatomic, readwrite) float maxValue;
+@property (nonatomic, readwrite) float step;
+@property (nonatomic, readwrite) float defaultValue;
+@property (nonatomic, readwrite, copy) NSString *unit;
+@property (nonatomic, readwrite, copy) NSArray<NSString *> *enumLabels;
+@end
+
+@implementation SVParameter
+
+- (instancetype)initWithDesc:(const stereo_param_desc *)desc {
+    self = [super init];
+    if (self == nil || desc == nullptr) return nil;
+    _identifier = desc->id;
+    _key = [NSString stringWithUTF8String:desc->key ?: ""];
+    _label = [NSString stringWithUTF8String:desc->label ?: ""];
+    _group = [NSString stringWithUTF8String:desc->group ?: ""];
+    switch (desc->kind) {
+        case STEREO_PARAM_INT: _kind = SVParamKindInteger; break;
+        case STEREO_PARAM_BOOL: _kind = SVParamKindFlag; break;
+        case STEREO_PARAM_ENUM: _kind = SVParamKindChoice; break;
+        default: _kind = SVParamKindNumber; break;
+    }
+    _minValue = desc->min_value;
+    _maxValue = desc->max_value;
+    _step = desc->step;
+    _defaultValue = desc->default_value;
+    _unit = [NSString stringWithUTF8String:desc->unit ?: ""];
+    if (desc->kind == STEREO_PARAM_ENUM && desc->enum_labels != nullptr) {
+        NSString *joined = [NSString stringWithUTF8String:desc->enum_labels];
+        _enumLabels = [joined componentsSeparatedByString:@"|"];
+    } else {
+        _enumLabels = @[];
+    }
+    return self;
+}
+
+@end
+
+@implementation SVParameterTable
+
++ (NSArray<SVParameter *> *)allParameters {
+    static NSArray<SVParameter *> *cache = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        const int n = stereo_param_count();
+        const stereo_param_desc *table = stereo_param_table();
+        NSMutableArray<SVParameter *> *list = [NSMutableArray arrayWithCapacity:(NSUInteger)n];
+        for (int i = 0; i < n; ++i) {
+            SVParameter *p = [[SVParameter alloc] initWithDesc:&table[i]];
+            if (p != nil) [list addObject:p];
+        }
+        cache = [list copy];
+    });
+    return cache;
+}
+
++ (nullable SVParameter *)lookup:(NSString *)key {
+    if (key == nil) return nil;
+    for (SVParameter *p in [self allParameters]) {
+        if ([p.key isEqualToString:key]) return p;
+    }
+    return nil;
+}
+
+@end
+
+// MARK: - 全流水线（stereo_process_frame）
+
+@interface SVFrameRequest ()
+@property (nonatomic, readwrite) NSInteger maxDisparity;
+@property (nonatomic, readwrite) NSInteger p1;
+@property (nonatomic, readwrite) NSInteger p2;
+@property (nonatomic, readwrite) float uniqueness;
+@property (nonatomic, readwrite) BOOL lrCheck;
+@property (nonatomic, readwrite) float minZ;
+@property (nonatomic, readwrite) float maxZ;
+@property (nonatomic, readwrite) simd_float4 centerRect;
+@property (nonatomic, readwrite) float centerQ;
+@property (nonatomic, readwrite) BOOL computeCenter;
+@property (nonatomic, readwrite) NSInteger maxBlobs;
+@property (nonatomic, readwrite) NSInteger minCells;
+@end
+
+@interface SVFrameTimings ()
+@property (nonatomic, readwrite) double rectify;
+@property (nonatomic, readwrite) double match;
+@property (nonatomic, readwrite) double depth;
+@property (nonatomic, readwrite) double unrectify;
+@property (nonatomic, readwrite) double analyze;
+@property (nonatomic, readwrite) double total;
+@end
+
+@implementation SVFrameTimings
+@end
+
+@implementation SVStereoCore (ProcessFrame)
+
+- (BOOL)processFrame:(const uint8_t *)left
+          leftStride:(NSInteger)leftStride
+          leftFormat:(SVImageFormat)leftFormat
+               right:(const uint8_t *)right
+         rightStride:(NSInteger)rightStride
+         rightFormat:(SVImageFormat)rightFormat
+             request:(SVFrameRequest *)request
+           disparity:(nullable float *)disparity
+          dispStride:(NSInteger)dispStride
+               depth:(float *)depth
+         depthStride:(NSInteger)depthStride
+            analysis:(SVAnalysis *)analysis
+             timings:(nullable SVFrameTimings *)timings {
+    if (_ctx == NULL) {
+        _lastError = @"context 已经释放";
+        return NO;
+    }
+    if (request == nil || request.geometry == nil || analysis == nil) return NO;
+
+    // 1) 几何：SVRectifyInput（simd）→ stereo_rectify_input（POD）
+    SVRectifyInput *in = request.geometry;
+    stereo_rectify_input geo{};
+    geo.wide = stereo_intrinsics{in.wideIntrinsics.x, in.wideIntrinsics.y, in.wideIntrinsics.z,
+                                 in.wideIntrinsics.w};
+    geo.ultra = stereo_intrinsics{in.ultraIntrinsics.x, in.ultraIntrinsics.y,
+                                  in.ultraIntrinsics.z, in.ultraIntrinsics.w};
+    copy_to_row_major(in.rotation, geo.R);
+    geo.t[0] = in.translation.x;
+    geo.t[1] = in.translation.y;
+    geo.t[2] = in.translation.z;
+    geo.src_width = (int)in.sourceWidth;
+    geo.work_width = (int)in.workWidth;
+    geo.work_height = (int)in.workHeight;
+    geo.flip = in.flip ? 1 : 0;
+    geo.dy = in.yOffset;
+
+    // 2) 匹配参数
+    stereo_config cfg{};
+    stereo_config_default(&cfg);
+    cfg.max_disp = (int)request.maxDisparity;
+    cfg.p1 = (int)request.p1;
+    cfg.p2 = (int)request.p2;
+    cfg.uniqueness = request.uniqueness;
+    cfg.lr_check = request.lrCheck ? 1 : 0;
+
+    // 3) 输出缓冲：labels 的尺寸要先问网格
+    int gw = 0, gh = 0;
+    if (stereo_analyze_grid((int)in.workWidth, (int)in.workHeight, &gw, &gh) != 0) return NO;
+    stereo_blob *blobs = [analysis resizeBlobs:(request.maxBlobs > 0 ? request.maxBlobs : 24)];
+    unsigned char *labels = [analysis resizeLabels:(NSInteger)gw * (NSInteger)gh];
+
+    stereo_image li{};
+    li.data = left;
+    li.width = (int)in.sourceWidth;
+    li.height = (int)(in.sourceHeight);
+    li.stride = (int)leftStride;
+    li.format = (int)leftFormat;
+
+    stereo_image ri = li;
+    ri.data = right;
+    ri.stride = (int)rightStride;
+    ri.format = (int)rightFormat;
+
+    const float center[4] = {request.centerRect.x, request.centerRect.y, request.centerRect.z,
+                             request.centerRect.w};
+
+    stereo_frame_input fin{};
+    fin.left = &li;
+    fin.right = &ri;
+    fin.geometry = &geo;
+    fin.config = &cfg;
+    fin.min_z = request.minZ;
+    fin.max_z = request.maxZ;
+    fin.analysis.fx = 0;   // 会被矫正后的 K 覆盖
+    fin.analysis.max_blobs = (int)(request.maxBlobs > 0 ? request.maxBlobs : 24);
+    fin.analysis.min_cells = (int)(request.minCells > 0 ? request.minCells : 40);
+    fin.center_rect = request.computeCenter ? center : nullptr;
+    fin.center_q = request.centerQ;
+
+    stereo_frame_output fout{};
+    fout.disp = disparity;
+    fout.disp_stride = (int)dispStride;
+    fout.depth = depth;
+    fout.depth_stride = (int)depthStride;
+    fout.blobs = blobs;
+    fout.blob_capacity = (int)(request.maxBlobs > 0 ? request.maxBlobs : 24);
+    fout.labels = labels;
+
+    stereo_frame_timings ft{};
+    if (stereo_process_frame(_ctx, &fin, &fout, timings != nil ? &ft : nullptr) != 0) {
+        _lastError = [NSString stringWithUTF8String:stereo_last_error(_ctx)];
+        return NO;
+    }
+
+    analysis.blobCount = fout.analysis.blob_count;
+    analysis.gridWidth = fout.analysis.grid_width;
+    analysis.gridHeight = fout.analysis.grid_height;
+    analysis.hasCenter = fout.analysis.has_center != 0;
+    analysis.center = fout.analysis.center;
+
+    if (timings != nil) {
+        timings.rectify = ft.rectify;
+        timings.match = ft.match;
+        timings.depth = ft.depth;
+        timings.unrectify = ft.unrectify;
+        timings.analyze = ft.analyze;
+        timings.total = ft.total;
+    }
+    _lastError = @"";
+    return YES;
 }
 
 @end

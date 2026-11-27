@@ -20,18 +20,18 @@ final class AppModel {
     private(set) var mode: ViewMode = .standard
 
     // ---- 引擎参数：只能经由 apply(_ draft:) 或自动标定修改 ----
-    // 不再用 didSet 逐字段 push —— 11 个字段要是一次提交就只推一次，
-    // 否则 Settings 拖一下会往管线里塞 11 次。
-    private(set) var minZ: Float = 0.12
-    private(set) var maxZ: Float = 3
-    private(set) var uniqueness: Float = 0.1
-    private(set) var maxDisparity = 64
-    private(set) var matcher = Matcher.sgm
-    private(set) var lrCheck = true
-    private(set) var p1: Float = 8
-    private(set) var p2: Float = 96
-    private(set) var yOffset: Float = 0
-    private(set) var flip = false
+    // 初值在 init 里从 **C++ 参数表**取的 SettingsDraft() 灌进来，这里不再写字面量。
+    // 也不再逐个 didSet→push：一次提交只推一次。
+    private(set) var minZ: Float
+    private(set) var maxZ: Float
+    private(set) var uniqueness: Float
+    private(set) var maxDisparity: Int
+    private(set) var matcher: Matcher
+    private(set) var lrCheck: Bool
+    private(set) var p1: Float
+    private(set) var p2: Float
+    private(set) var yOffset: Float
+    private(set) var flip: Bool
 
     // ---- 纯显示状态：即时生效，不进管线 ----
     private(set) var overlayAlpha: Float = 0.55
@@ -122,6 +122,19 @@ final class AppModel {
     @ObservationIgnored private let camera = CameraController()
 
     init() {
+        // 引擎参数的初值来自 C++ 的参数表（与设置页同一份）
+        let initial = SettingsDraft()
+        minZ = initial.minZ
+        maxZ = initial.maxZ
+        uniqueness = initial.uniqueness
+        maxDisparity = initial.maxDisparity
+        matcher = initial.matcher
+        lrCheck = initial.lrCheck
+        p1 = initial.p1
+        p2 = initial.p2
+        yOffset = initial.yOffset
+        flip = initial.flip
+
         let device = MTLCreateSystemDefaultDevice()!
         let engine = StereoEngine(device: device)
         pipeline = Pipeline(engine: engine)

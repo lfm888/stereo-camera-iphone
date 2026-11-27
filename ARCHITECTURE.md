@@ -39,6 +39,8 @@ Shaders.metal                 GPU kernel（iOS 上的快路径）
 | `stereo_sample_depth` / `stereo_analyze` / `stereo_analyze_grid` | 深度查询与连通域分析（准星读数、点选测距、3D segmentation 面块） |
 | `stereo_point_cloud` / `stereo_point_cloud_capacity` / `stereo_depth_filter` / `stereo_depth_to_u16_mm` / `stereo_copy_depth` | 导出：PLY 点云、深度裁剪、16 位毫米打包、跨度拷贝 |
 | `stereo_calibrate` / `stereo_calibrate_search` | 自动标定：前者 CPU 全流水线，后者由平台提供打分回调（iOS 用 GPU） |
+| `stereo_process_frame` | **第 2..5 步一条龙**（矫正→匹配→深度→回转→分析），给非 Apple 前端用；iOS 的 GPU 快路径不走它 |
+| `stereo_param_count` / `stereo_param_table` / `stereo_param_find` | 参数描述表（名称/分组/范围/步长/默认值/单位/枚举），界面据此生成滑杆 |
 
 ### 1.2 实现
 
@@ -51,7 +53,8 @@ Shaders.metal                 GPU kernel（iOS 上的快路径）
 | `src/analyze.cpp` | 207 | 降采样成网格 → 4 邻域深度连通域 → 面块统计 | `analyze_depth` |
 | `src/cloud.cpp` | 187 | PLY（`std::to_chars`）、深度裁剪/打包/拷贝 | `point_cloud_ply` `depth_filter` `depth_to_u16_mm` `copy_depth` |
 | `src/calibrate.cpp` | 222 | 自动标定搜索（2×25 + 4 细化）；CPU 打分版也在里面 | `calibrate_search` `calibrate_rectification` |
-| `src/stereo_c_api.cpp` | 611 | 参数校验 + 缓冲管理 + POD 翻译（**不含算法**） | 上面那 18 个符号 |
+| `src/stereo_c_api.cpp` | 780 | 参数校验 + 缓冲管理 + POD 翻译 + `stereo_process_frame` 的组合调用（**不含算法**） | 上面那 21 个符号 |
+| `src/params.cpp` | 90 | **参数描述表（唯一真源）**：默认值也供给 `stereo_config_default` | `param_table` / `param_default` |
 
 ### 1.3 测试（不进 App，CI 的 6 个套件）
 
@@ -72,7 +75,9 @@ Shaders.metal                 GPU kernel（iOS 上的快路径）
 | `SVRectifyInput` / `SVRectification` | h 263-307 / mm 380+ | 第 2 步的输入输出（`+solve:`），把 `float[9]` 换成 `simd_float3x3` |
 | `SVAnalysis` / `SVBlobRecord` | h 172-200 / mm 300+ | 面块与标签图的**借用指针**容器（避免每帧分配） |
 | `SVCalibration` | h 162-170 | 自动标定结果（flipped / yOffset / score） |
-| `SVExporter` | h 207-255 / mm 440+ | 点云 PLY（返回 `NSData`）、毫米打包、深度裁剪、跨度拷贝、非负均值 |
+| `SVExporter` | — | 点云 PLY（返回 `NSData`）、毫米打包、深度裁剪、跨度拷贝、非负均值 |
+| `SVParameter` / `SVParameterTable` | — | **参数表桥接**：Swift 的设置界面按它生成滑杆（不再各写一份范围） |
+| `SVFrameRequest` / `SVFrameTimings` + `- processFrame:` | — | `stereo_process_frame` 的桥接（iOS 不用，留给非 Apple 前端与将来的全 CPU 后端） |
 
 这一层只做三件事：指针与生命周期、simd ↔ `float[9]`、POD ↔ ObjC 对象。**不放算法**。
 
