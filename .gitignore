@@ -1,5 +1,7 @@
 build/
 DerivedData/
+# 工程文件由 project.yml 生成（CI 里 xcodegen generate），不再提交
+StereoVision.xcodeproj/
 xcuserdata/
 *.xcuserstate
 .DS_Store

@@ -276,4 +276,9 @@ cd build/core && ctest -C Release
 ```
 
 > 注意：iOS 侧**没有单元测试**，删改 Swift 之后只能靠 CI 编译 + 真机验证。
-> `project.pbxproj` 是提交进仓库的、CI 不跑 xcodegen——删文件必须同时改它，否则 CI 会静默用旧工程。
+>
+> **工程文件不再提交**：`StereoVision.xcodeproj` 由 `project.yml` 在 CI 里生成
+> （`xcodegen generate --spec project.yml`），`.gitignore` 已忽略它。
+> 所以增删源文件**只需要动文件本身**，不要再手改 pbxproj；`scripts/check_xcodeproj_sources.sh`
+> 会在构建前确认"磁盘上的源文件"和"工程里参与编译的文件"一致，漏一个就当场失败。
+> 本地想生成：`brew install xcodegen && xcodegen generate --spec project.yml`。
