@@ -1,13 +1,14 @@
 # 架构地图
 
 > 用途：改代码 / 删文件之前先看这一页。行数是 `wc -l` 实测值（2026-11）。
-> 代码量 ≈ 8.6k 行：C++ 实现 3.4k、C++ 测试 2.4k、Swift 2.9k、ObjC++ 桥 1.2k、Metal 0.4k。
+> 代码量 ≈ 9.5k 行：C++ 实现 2.3k、C++ 测试 2.4k、Swift 3.8k（其中后端拆分后的 `Engine/` 1.4k）、ObjC++ 桥 1.2k、Metal 0.4k。
 > 结论先放这里：**iOS 上没有任何一段 C++ 算法是被绕过的**，反向也不成立——C++ 从不持有平台指针。
 
 ## 0. 五层，依赖只向下
 
 ```
-StereoVision/*.swift          SwiftUI 界面 + 运行时（相机/引擎/渲染/导出）
+StereoVision/*.swift + Engine/  SwiftUI 界面 + 运行时（相机/渲染/导出）
+StereoVision/Engine/*.swift     双目流程编排 + 可替换的阶段后端（Metal / C++）
         │  只读快照 + intent 协议
 StereoVision/Bridge/*.mm      ObjC++ 门面：指针、生命周期、simd ↔ float[9] 换乘
         │  纯 C 头（POD + 不透明句柄）
@@ -110,12 +111,43 @@ Shaders.metal                 GPU kernel（iOS 的快路径）
 | `Contracts.swift` | 308 | 共享词汇 + 界面契约 + 诊断值类型 | `ViewMode`/`Matcher`/`DisplayOrientation`、`SettingsDraft`（含 `subscript(key:)`）、`DeviceInfo`/`CaptureUIState`、`CaptureIntents`/`SettingsIntents`、`GpuReport`/`DiagnosticsSnapshot` |
 | `Pipeline.swift` | 154 | 每帧后台管线与报告类型 | `PipelineSettings`、`PipelineKind`、`StageTimings`、`FrameReport`、`FrameStore`、`Pipeline`（`stereo`/`depthData`/`timings(of:)`/`finish`） |
 | `AppModel.swift` | 369 | 状态聚合 + 接线 + 意图实现 | `start`/`setSource`/`calibrate`/`measure`/`captureTarget`/`metadata`/`outputSize` + 只读视图 `ui`/`diagnostics`/`draft`/`device` |
-| `StereoEngine.swift` | 481 | Metal 管线 + C++ 调用 + `StereoFrame`/`DepthTarget` | `stereo`（全 GPU）、`stereoCPU`（GPU 矫正 + C++ 匹配/深度）、`calibrate`+`score`、`depthData`、`geometry`、`encodeRectify`/`encodeSGM`/`encodeMatch` |
+| `StereoEngine.swift` | 237 | **唯一流程编排者**：输入 → 几何 → 矫正 → 匹配 → 深度 → `StereoFrame` | `processStereoFrame`、`calibrate`、`depthData`、`configure`；不再持有 PSO/纹理/C++ 指针细节 |
 | `CameraController.swift` | 213 | AVFoundation 会话：双摄/系统深度、format 选择、同步输出 | `start`/`stop`、`makeStereo`/`makeDepth`、`dataOutputSynchronizer` |
 | `Calibration.swift` | 157 | **第 1 步**：只向系统要参数，不做几何 | `CalibrationSource.intrinsics(of:fov:size:)`、`.calibration(of:)`、`.extrinsics(from:to:)`、`.rig(wide:ultra:)`、`.depthIntrinsics` |
 | `Analyzer.swift` | 90 | C++ 分析结果的薄适配层（C 结构 → `CGRect`/数组） | `Blob`/`Analysis`/`Analyzer.analyze(_:using:)` |
 | `Renderer.swift` | 199 | MetalKit 渲染：显示 / 点云 / 离屏烧录 | `draw`、`encode`、`uploadLabels`、`drawPoints`、`offscreenPass` + 矩阵工具 |
 | `Capture.swift` | 256 | 拍照/录像/导出（不持有 `AppModel`） | `takePhoto`、`toggleRecording`、`beginPhoto`、`beginRecordingFrame`、`export`、`ply` |
+
+### 3.2.1 引擎阶段（`StereoVision/Engine/`）
+
+流程固定、阶段可替换。每个后端只做自己那一段，不复制整条流程；`StereoEngine` 是唯一的编排者。
+
+| 文件 | 行 | 职责 | 关键类型 |
+|---|---|---|---|
+| `StereoEngine.swift` | 237 | 编排：输入 → 几何 → 矫正 → 匹配 → 深度 → 组帧 | `processStereoFrame(_:_:_:mode:)` |
+| `StereoTypes.swift` | 111 | 阶段间值类型 + 工作分辨率 | `StereoWork`、`StereoGeometry`、`StereoFrame` |
+| `StereoConfiguration.swift` | 34 | 后端组合（配置，不是流程分支） | `StereoMode`（`.metal` / `.cppHybrid`）、`PipelineSettings.stereoMode` |
+| `Input/FrameInputProvider.swift` | 73 | 相机输入适配：样本 → 纹理 + 每帧内参 + `CameraRig` | `FrameInputs`、`FrameInputProvider` |
+| `Geometry/StereoGeometrySolver.swift` | 52 | 第 2 步几何，交给 `SVRectification.solve`（core/src/geometry.cpp） | `solve(rig:wide:ultra:...)` |
+| `Rectification/RectificationBackend.swift` | 26 | 矫正阶段窄接口（编码进调用方的 command buffer） | `RectificationBackend` |
+| `Rectification/MetalRectifier.swift` | 31 | `rectify` kernel | `MetalRectifier` |
+| `Matching/MatchingBackend.swift` | 56 | 匹配阶段窄接口 + 纹理视图 | `MatchingBackend`（`encodeCensus`/`encodeMatch`）、`MetalMatchInput` |
+| `Matching/MetalSGMMatcher.swift` | 77 | SGM 4 路径（costVolume → sgmPath×4 → wta） | `MetalSGMMatcher`（持有 cost/sum 缓冲、dispRight） |
+| `Matching/MetalBlockMatcher.swift` | 39 | 5×5 块匹配（也被标定打分复用） | `MetalBlockMatcher` |
+| `Matching/CppSGMMatcher.swift` | 40 | C++ 匹配（core/src/sgm.cpp），同步调用 | `configure`/`match` |
+| `Readback/CPUImageReadback.swift` | 77 | 显式像素读回适配：锁 buffer + `getBytes` + 视差缓冲 | `CPUImageReadback` |
+| `Depth/DepthBackend.swift` | 27 | 深度阶段窄接口（只有 Metal 版有 encoder 形状） | `MetalDepthBackend` |
+| `Depth/MetalDepthProcessor.swift` | 39 | `toDepth` → `unrectifyDepth` | `MetalDepthProcessor` |
+| `Depth/CppDepthProcessor.swift` | 47 | C++ `depth(fromDisparity:)` + `unrectifyDepth`（直接写共享 buffer） | `CppDepthProcessor` |
+| `Depth/SystemDepthProcessor.swift` | 55 | 系统深度（AVDepthData）→ `filterDepth`，**不是** SGM 后端 | `SystemDepthProcessor` |
+| `Calibration/StereoCalibrator.swift` | 83 | 自动标定：C++ 候选搜索 + GPU 打分（slots[0]） | `StereoCalibrator` |
+| `Metal/MetalContext.swift` | 40 | device / command queue / 纹理缓存 | `MetalContext` |
+| `Metal/MetalPipelines.swift` | 43 | 9 条 compute PSO 的创建与持有 | `MetalPipelines` |
+| `Metal/MetalFrameResources.swift` | 110 | Slot ×3、`DepthTarget`、左图 PixelBufferPool | `MetalSlot`、`MetalFrameResources` |
+| `Metal/MetalDispatch.swift` | 36 | dispatch 样板（线程数口径与改造前一致） | `MetalDispatch` |
+| `Metal/MetalShaderTypes.swift` | 39 | kernel 参数结构（ABI 与 Shaders.metal 对齐） | `RectParams`/`MatchParams`/`DepthParams`/`SGMParams` |
+
+阶段与后端的对应关系、以及每帧/每资源跑在哪个线程、谁写谁读，见 `docs/engine-backend-baseline.md`。
 
 ### 3.3 GPU
 
@@ -133,7 +165,8 @@ Shaders.metal                 GPU kernel（iOS 的快路径）
 StereoVisionApp                   ContentView.swift
 └─ ContentView                    ContentView.swift
    └─ AppModel()                  AppModel.swift
-      ├─ StereoEngine(device:)    StereoEngine.swift   → 9 条 PSO、3 个 Slot 纹理、SVStereoCore
+      ├─ StereoEngine(device:)    Engine/StereoEngine.swift → MetalContext + MetalPipelines + MetalFrameResources
+      │                                                  + FrameInputProvider + 各阶段 backend + SVStereoCore
       ├─ Pipeline(engine:)        Pipeline.swift       → FrameStore、Analyzer、PipelineSettings
       ├─ Renderer(device:store:)  Renderer.swift       → 显示/点云 PSO、labelTex、纹理缓存
       ├─ Capture()                Capture.swift
@@ -150,7 +183,8 @@ ContentView.body                  .task { await model.startCapture() }
    └─ AppModel.start()            → AVCaptureDevice 授权 → refreshOrientation → setSource(.stereo)
       └─ CameraController.start()  CameraController.swift
          └─ makeStereo()          → MultiCam session + 两个 VideoDataOutput + Synchronizer
-            └─ onDevices → StereoEngine.configure()   StereoEngine.swift
+            └─ onDevices → StereoEngine.configure()   Engine/StereoEngine.swift
+               └─ FrameInputProvider.configure        Engine/Input/FrameInputProvider.swift
                └─ CalibrationSource.rig()             Calibration.swift   ← 第 1 步：读 K / R / t
 ```
 
@@ -159,13 +193,16 @@ ContentView.body                  .task { await model.startCapture() }
 ```
 CameraController.dataOutputSynchronizer(...)     CameraController.swift
 └─ onStereo → Pipeline.stereo                    Pipeline.swift
-   ├─ [可选] StereoEngine.calibrate              StereoEngine.swift   （calibrate 标志为真时；
-   │         C++ search + GPU 打分 → SVStereoCore.calibrate:flip0:dy0:）
-   ├─ StereoEngine.stereo                        StereoEngine.swift   ← 默认全 GPU 路径
-   │  ├─ inputs()            → CalibrationSource.intrinsics(of:fov:size:) + CVMetalTextureCache
-   │  ├─ geometry()          → SVRectification.solve → stereo_rectify_geometry → geometry.cpp
-   │  └─ 一条 command buffer：encodeRectify ×2 → census ×2 → encodeSGM
-   │                          → toDepth → unrectifyDepth      （kernel 全在 Shaders.metal）
+   ├─ [可选] StereoEngine.calibrate              Engine/StereoEngine.swift
+   │         └─ StereoCalibrator.calibrate       Engine/Calibration/StereoCalibrator.swift
+   │            （C++ 候选搜索 + GPU 打分：rectify → census → block match，用 slots[0]）
+   ├─ StereoEngine.processStereoFrame            Engine/StereoEngine.swift   ← 唯一编排入口（mode = .metal）
+   │  ├─ FrameInputProvider.inputs()             → 纹理 + 内参 + CameraRig
+   │  ├─ StereoGeometrySolver.solve()            → SVRectification.solve → geometry.cpp（每帧一次）
+   │  ├─ MetalRectifier.encode ×2                → rectify kernel
+   │  ├─ Metal(SGM|Block)Matcher.encodeCensus/Match
+   │  ├─ MetalDepthProcessor.encode              → toDepth → unrectifyDepth
+   │  └─ 以上全部在**一条** command buffer 里
    └─ Pipeline.finish                            Pipeline.swift
       ├─ store.latest = frame
       ├─ Analyzer.analyze(_:using:)              Analyzer.swift
@@ -227,11 +264,11 @@ SidePanel 按钮                    CaptureScreen.swift   showSettings = true
    └─ **一次** push{...} 写进 PipelineSettings（不是 11 个 didSet 各推一次）
 
 下一帧生效位置
-├─ maxDisparity / p1 / p2 / uniqueness / lrCheck → StereoEngine.encodeSGM
-│  （CPU 后端还会 SVStereoCore.configure 重新分配 C++ 缓冲）
-├─ matcher   → StereoEngine.stereo 的分支（.sgm → encodeSGM，.block → encodeMatch）
-├─ minZ/maxZ → DepthParams → toDepth；以及 displayFragment 的着色映射
-└─ flip/yOffset → StereoEngine.geometry → SVRectification.solve
+├─ maxDisparity / p1 / p2 / uniqueness / lrCheck → MetalSGMMatcher.encodeMatch
+│  （CPU 混合模式还会 CppSGMMatcher.configure 重新分配 C++ 缓冲）
+├─ matcher   → StereoEngine.processStereoFrame 里的 matchers[matcher]（.sgm / .block 两个实现）
+├─ minZ/maxZ → MetalDepthProcessor（DepthParams → toDepth）；以及 displayFragment 的着色映射
+└─ flip/yOffset → StereoGeometrySolver.solve → SVRectification.solve
 ```
 
 点 **Cancel** → 丢弃 `draft`（`overlay_alpha` 已生效，这是唯一的不一致）。
@@ -252,10 +289,10 @@ BGRA 双帧 ─GPU rectify→ 640×360 左右图 ─Metal SGM→ 视差 ─toDep
 |---|---|---|---|
 | 1 | `stereo_process_frame` + `SVFrameRequest`/`SVFrameTimings` + `-processFrame:` | **Swift 侧零调用**，只有 `frame_test` 与非 Apple 前端会用 | iOS 上要不要留？若将来做"全 CPU 后端"或 Qt 前端，它是入口；只服务 iOS 就是纯死代码（约 350 行 C++/桥接） |
 | 2 | `stereo_calibrate`（CPU 全流水线版） | 只有测试用；iOS 走 `stereo_calibrate_search` + GPU 打分（CPU 版 640×360 实测 3.4 s） | 只保留 `_search` 可删 ~120 行，但会失去"无 GPU 平台也能标定" |
-| 3 | 块匹配后端 `Matcher.block` | `Shaders.metal` 的 `match` kernel + `StereoEngine.encodeMatch` + `stereo()` 的分支；**同时被标定的 GPU 打分复用** | 后端还用得上吗？砍它要先把标定打分换成别的代价函数 |
-| 4 | 两条系统深度分支 | `DepthSource.apple`/`.lidar` + `StereoEngine.depthData`（~60 行）+ `CameraController.makeDepth`（~45 行） | 如果只用自研双目，整条可删 |
+| 3 | 块匹配后端 `Matcher.block` | `Shaders.metal` 的 `match` kernel + `Engine/Matching/MetalBlockMatcher.swift`；**同时被标定的 GPU 打分复用** | 后端还用得上吗？砍它要先把标定打分换成别的代价函数 |
+| 4 | 两条系统深度分支 | `DepthSource.apple`/`.lidar` + `Engine/Depth/SystemDepthProcessor.swift`（~55 行）+ `CameraController.makeDepth`（~45 行） | 如果只用自研双目，整条可删 |
 | 5 | `CalibrationSource.calibration(of:)` / `.extrinsics(from:to:)` | 只在 `rig()` 里各用一次；每帧真正用的是 `intrinsics(of:fov:size:)` | 三者能否合一 |
-| 6 | 双份"视差后"实现 | `stereo_process_frame` 内部调 `to_depth`/`unrectify`，iOS 的 `stereoCPU` 调 `depthFromDisparity`+`unrectifyDepth`（同一对函数、两次调用） | 可合并成 `stereo_process_disparity`（省一次 malloc + 一次跨桥）；FAQ Q18 有分析 |
+| 6 | 双份"视差后"实现 | `stereo_process_frame` 内部调 `to_depth`/`unrectify`，iOS 的 `CppDepthProcessor` 调 `depthFromDisparity`+`unrectifyDepth`（同一对函数、两次调用） | 可合并成 `stereo_process_disparity`（省一次 malloc + 一次跨桥）；FAQ Q18 有分析 |
 | 7 | `core/tests/` 2351 行 | 不是运行时代码，但它是"改 C++ 不出错"的唯一保障（**iOS 侧没有任何测试**） | 删测试 = 放弃回归保护 |
 | 8 | `Renderer` 的矩阵工具 | `perspective`/`translate`/`rotateX/Y/Z`（~25 行）只服务点云视图 | 值得留 |
 | 9 | `tools/` 下的脚本 | `sgm_ref.py`+`gen_golden.py` 是金标准的来源（有用）；`viewer.html` / `make_demo_export.py` 用途不明 | 后两个确认没人用可删 |

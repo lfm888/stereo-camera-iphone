@@ -31,12 +31,25 @@ StereoVision/Bridge/               ② C / Objective-C++ 中间层
 
 StereoVision/                      ③ Swift 前端
   StereoVision-Bridging-Header.h     编译器开关（只有一行 #import）
-  StereoEngine.swift                 Metal 管线 + C++ 管线（stereoCPU）
+  Engine/                            双目流程编排 + 可替换的阶段后端
+    StereoEngine.swift               唯一编排者（输入 → 几何 → 矫正 → 匹配 → 深度）
+    StereoConfiguration.swift        后端组合：StereoMode.metal / .cppHybrid
+    Input/ FrameInputProvider.swift  样本 → 纹理 + 内参 + CameraRig
+    Geometry/ StereoGeometrySolver.swift  SVRectification.solve（core/src/geometry.cpp）
+    Rectification/ MetalRectifier.swift   rectify kernel
+    Matching/                         MetalSGMMatcher / MetalBlockMatcher / CppSGMMatcher
+    Depth/                            MetalDepthProcessor / CppDepthProcessor / SystemDepthProcessor
+    Calibration/ StereoCalibrator.swift   C++ 候选搜索 + GPU 打分
+    Readback/ CPUImageReadback.swift     像素读回适配（C++ 匹配的输入）
+    Metal/                            MetalContext / MetalPipelines / MetalFrameResources / MetalDispatch
   CameraController.swift             双摄 / 系统深度两路采集
   Renderer.swift · Shaders.metal     各视图的渲染（Metal）
   Analyzer.swift                     深度连通域 → 3D segmentation 标签
-  AppModel.swift · ContentView.swift · OverlayView.swift · DiagnosticsView.swift
+  AppModel.swift · ContentView.swift · OverlayView.swift · DiagnosticsScreen.swift
 ```
+
+各阶段跑在 GPU 还是 CPU、资源谁写谁读、计时口径，见
+`docs/engine-backend-baseline.md`；目录与职责的完整表在 `ARCHITECTURE.md` §3.2.1。
 
 | 层 | 语言 | 职责 | 不知道什么 |
 |---|---|---|---|
