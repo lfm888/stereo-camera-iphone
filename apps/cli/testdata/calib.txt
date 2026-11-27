@@ -1,0 +1,33 @@
+# CLI 测试夹具的标定（160x120，工作分辨率 = 原始分辨率 → 矫正接近恒等）
+# 内参单位：原始图像像素
+fx = 100
+fy = 100
+cx = 80
+cy = 60
+
+# 超广角内参（缺省 = 与宽相机相同）
+ufx = 100
+ufy = 100
+ucx = 80
+ucy = 60
+
+# 外参：X_wide = R * X_ultra + t（t 单位毫米）；基线沿 x 轴 32.5 mm
+R = 1 0 0  0 1 0  0 0 1
+t = 32.5 0 0
+
+src_width = 160
+work_width = 160
+work_height = 120
+
+flip = 0
+dy = 0
+
+# 匹配参数（不写则取参数表默认值）
+max_disp = 16
+p1 = 8
+p2 = 96
+uniqueness = 0.1
+lr_check = 1
+
+min_z = 0.1
+max_z = 10

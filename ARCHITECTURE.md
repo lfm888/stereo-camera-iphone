@@ -20,6 +20,7 @@ StereoVision/Bridge/*.mm      ObjC++ 门面：指针、生命周期、simd ↔ f
         │  纯 C 头（POD + 不透明句柄）
 core/include + core/src       C++ 算法（零 Apple 依赖、零第三方依赖）
 core/tests                    C++ 侧全部测试（Windows/Linux/macOS 都跑）
+apps/cli                      第二个前端：只 include 公开 C 头（跨平台能力的验收件）
 Shaders.metal                 GPU kernel（iOS 的快路径）
 ```
 
@@ -330,7 +331,7 @@ BGRA 双帧 ─GPU rectify→ 640×360 左右图 ─Metal SGM→ 视差 ─toDep
 
 | # | 对象 | 事实 | 值得问的问题 |
 |---|---|---|---|
-| 1 | `stereo_process_frame` + `SVFrameRequest`/`SVFrameTimings` + `-processFrame:` | **Swift 侧零调用**，只有 `frame_test` 与非 Apple 前端会用 | iOS 上要不要留？若将来做"全 CPU 后端"或 Qt 前端，它是入口；只服务 iOS 就是纯死代码（约 350 行 C++/桥接） |
+| 1 | `stereo_process_frame` + `SVFrameRequest`/`SVFrameTimings` + `-processFrame:` | `apps/cli` 与 `frame_test` 在用；**Swift 侧零调用** | Bridge 的 `-processFrame:`/`SVFrameRequest`/`SVFrameTimings`（约 350 行）可以删；core 的 `stereo_process_frame` 不能删（CLI 是它的真实使用者） |
 | 2 | `stereo_calibrate`（CPU 全流水线版） | 只有测试用；iOS 走 `stereo_calibrate_search` + GPU 打分（CPU 版 640×360 实测 3.4 s） | 只保留 `_search` 可删 ~120 行，但会失去"无 GPU 平台也能标定" |
 | 3 | 块匹配后端 `Matcher.block` | `Shaders.metal` 的 `match` kernel + `Engine/Matching/MetalBlockMatcher.swift`；**同时被标定的 GPU 打分复用** | 后端还用得上吗？砍它要先把标定打分换成别的代价函数 |
 | 4 | 两条系统深度分支 | `DepthSource.apple`/`.lidar` + `Engine/Depth/SystemDepthProcessor.swift`（~55 行）+ `CameraSessionController.makeDepth`（~45 行） | 如果只用自研双目，整条可删 |
@@ -373,6 +374,7 @@ cd build/core && ctest -C Release
 |---|---|---|
 | C++ 对拍 + 几何/分析/标定测试（7 个套件） | 本机即可（Windows/Linux/macOS，零第三方依赖） | `cmake -S core -B build/core -DCMAKE_BUILD_TYPE=Release && cmake --build build/core --config Release && cd build/core && ctest -C Release` |
 | 未签名 IPA | GitHub Actions 的 macOS runner（`.github/workflows/ipa.yml`；push `main`/`test` 或手动 dispatch） | CI：`xcodegen generate` → `scripts/check_xcodeproj_sources.sh` → `xcodebuild`（`CODE_SIGNING_ALLOWED=NO`）→ 打成 `Payload/` zip |
+| CLI（第二个前端） | 本机 / CI 三平台矩阵 | `cmake -S . -B build/all -DCMAKE_BUILD_TYPE=Release && cmake --build build/all --config Release --target stereo_cli`；夹具在 `apps/cli/testdata/`（160×120 PNM + key=value 标定） |
 | 取回 IPA | 本地（需要 GitHub token，脚本会先问 `git credential`） | `./scripts/fetch_ipa.sh` → `build/StereoVision-unsigned.ipa` |
 | 工程文件 | CI / macOS 本地 | `xcodegen generate --spec project.yml`（`.xcodeproj` 不入库） |
 

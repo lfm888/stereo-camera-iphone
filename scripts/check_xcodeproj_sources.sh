@@ -26,8 +26,8 @@ PROJECT="${PROJECT:-StereoVision.xcodeproj}"
 
 # 参与 iOS 编译的目录（必须与 project.yml 的 sources 对应）
 COMPILED_DIRS="StereoVision core/src"
-# 明确不参与 iOS 编译的目录（脚本、工具、C++ 测试、构建产物、CI 配置）
-EXEMPT_DIRS="core/tests scripts tools docs build .github Config"
+# 明确不参与 iOS 编译的目录（C++ 测试、CLI、脚本、工具、构建产物、CI 配置）
+EXEMPT_DIRS="core/tests apps scripts tools docs build .github Config"
 
 if [ ! -d "$PROJECT" ]; then
     echo "找不到 $PROJECT —— 先运行 xcodegen generate --spec project.yml"

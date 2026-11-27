@@ -11,12 +11,16 @@ on:
     branches: [main, test]
     paths:
       - "core/**"
+      - "apps/**"
+      - "CMakeLists.txt"
       - "tools/check_api_surface.py"
       - "scripts/check_layering.sh"
       - ".github/workflows/core.yml"
   pull_request:
     paths:
       - "core/**"
+      - "apps/**"
+      - "CMakeLists.txt"
       - "tools/check_api_surface.py"
       - "scripts/check_layering.sh"
       - ".github/workflows/core.yml"
@@ -163,3 +167,49 @@ jobs:
           fi
           echo "== $BIN =="
           "$BIN"
+
+      # ------------------------------------------------------------------
+      # 第二个前端：apps/cli（只 include 公开 C 头，零第三方依赖）
+      # 它同时是"公开 C 面是否够用"的验收件：编不过或跑不通，就说明 API 缺口。
+      # ------------------------------------------------------------------
+      - name: CLI build (second frontend)
+        run: |
+          cmake -S . -B build/all -DCMAKE_BUILD_TYPE=Release
+          cmake --build build/all --config Release --parallel --target stereo_cli
+
+      - name: CLI smoke (fixtures + determinism)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN=""
+          for c in build/all/apps/cli/Release/stereo_cli.exe build/all/apps/cli/stereo_cli; do
+            if [ -f "$c" ]; then BIN="$c"; break; fi
+          done
+          if [ -z "$BIN" ]; then
+            echo "找不到 stereo_cli"
+            find build/all -name "*stereo_cli*" | head -20
+            exit 1
+          fi
+          mkdir -p build/cli-out
+          ARGS=(--left apps/cli/testdata/left.pgm
+                --right apps/cli/testdata/right.pgm
+                --calib apps/cli/testdata/calib.txt
+                --depth build/cli-out/depth.pfm
+                --disp build/cli-out/disp.pfm
+                --labels build/cli-out/labels.pgm
+                --ply build/cli-out/cloud.ply)
+          REPORT=$("$BIN" "${ARGS[@]}")
+          echo "$REPORT"
+          case "$REPORT" in *"valid depth 0/"*) echo "FAIL: 没有有效深度"; exit 1;; esac
+          case "$REPORT" in *"timings ms:"*) ;; *) echo "FAIL: 没有耗时报告"; exit 1;; esac
+          [ "$(head -c 2 build/cli-out/depth.pfm)" = "Pf" ] || { echo "FAIL: depth 不是 PFM"; exit 1; }
+          [ "$(head -c 3 build/cli-out/cloud.ply)" = "ply" ] || { echo "FAIL: 点云不是 PLY"; exit 1; }
+          # 确定性：同一输入跑两次，产物逐字节一致
+          "$BIN" --left apps/cli/testdata/left.pgm \
+                 --right apps/cli/testdata/right.pgm \
+                 --calib apps/cli/testdata/calib.txt \
+                 --depth build/cli-out/depth2.pfm \
+                 --disp build/cli-out/disp2.pfm > /dev/null
+          cmp build/cli-out/depth.pfm build/cli-out/depth2.pfm
+          cmp build/cli-out/disp.pfm build/cli-out/disp2.pfm
+          echo "OK: CLI 产物非空且确定"

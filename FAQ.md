@@ -408,7 +408,7 @@ kernel 的耗时（要拆得用 `MTLCounterSampleBuffer`）。C++ 路径天然�
 | 2 | `Shaders.metal` 的 5×5 块匹配 kernel 的 C++ 对照 | C++ 侧没有这个 kernel；`stereo_calibrate` 的打分是另一套（Census + 逐视差汉明最小值、抽样），只服务非 Apple 平台。iOS 自动标定仍用 Metal 块匹配打分 |
 | 3 | ~~`rectify` / `unrectifyDepth` 搬 C++~~ | **已完成**：`core/src/rectify.cpp`；`stereo_process_frame` 可整条 CPU 跑 |
 | 4 | `census` / `wta` 钳位偏移表 + `sgmPath` SIMD | 见 Q14 的优化顺序 |
-| 5 | Windows exe / Linux deb 的 CLI | `.a` 已经能出，缺一个读图的 CLI |
+| 5 | Windows exe / Linux deb 的 CLI | **CLI 已落地**：`apps/cli`（只 include 公开 C 头，PNM/PFM + key=value 标定，CI 三平台冒烟）；**deb/exe 包装仍未做** |
 
 ## Q17. 开发约定
 

@@ -55,6 +55,13 @@ no_words "旧类名零残留（CameraController / CalibrationSource / Analyzer /
 no_matches "Swift 里没有逐像素循环（for … in 0..<）" \
     'for .* in 0\.\.<' --include='*.swift' StereoVision
 
+echo "== CLI（第二个前端）约束 =="
+if [ -d apps/cli ]; then
+    no_matches "apps/cli 只 include 公开 C 头（不出现 .hpp）"         '#[[:space:]]*include[[:space:]]*"[^"]*\.hpp"' apps/cli
+else
+    echo "SKIP apps/cli（还不存在）"
+fi
+
 echo "== core/ 跨平台约束 =="
 no_matches "core/ 不 include Apple 框架头" \
     '#(include|import)[[:space:]]*[<"](Foundation|UIKit|AVFoundation|CoreVideo|CoreGraphics|CoreImage|Metal|MetalKit|QuartzCore|Photos|ImageIO|UniformTypeIdentifiers)[/>"]' \
