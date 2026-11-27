@@ -56,7 +56,10 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
 // 内部写入口：只在 Bridge 里用，不暴露给 Swift（不写在公开头文件里）。
 @interface SVAnalysis ()
 /// 把内部缓冲扩到至少 count，返回可直接给 C++ 写的指针。
-- (stereo_blob *)resizeBlobs:(NSInteger)count;
+///
+/// 注意是 `stereo_blob`（C 结构）：SVAnalysis 对外存的是 `SVBlobRecord`，
+/// 所以 C++ 写完之后还要 fillFromCBlobs: 翻译一次。
+- (stereo_blob *)resizeCBlobs:(NSInteger)count;
 - (unsigned char *)resizeLabels:(NSInteger)count;
 @property (nonatomic, readwrite) NSInteger blobCount;
 @property (nonatomic, readwrite) NSInteger gridWidth;
@@ -360,15 +363,17 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
 @implementation SVAnalysis {
     std::vector<SVBlobRecord> _blobs;
     std::vector<uint8_t> _labels;
+    /// 给 C++ 直接写用的中间缓冲（processFrame 用，写完翻译进 _blobs）。
+    std::vector<stereo_blob> _c_blobs;
 }
 
 - (const void *)blobs { return _blobs.data(); }
 - (const void *)labels { return _labels.data(); }
 
-- (stereo_blob *)resizeBlobs:(NSInteger)count {
+- (stereo_blob *)resizeCBlobs:(NSInteger)count {
     if (count < 0) count = 0;
-    _blobs.resize(static_cast<size_t>(count));
-    return _blobs.data();
+    _c_blobs.resize(static_cast<size_t>(count));
+    return _c_blobs.data();
 }
 
 - (unsigned char *)resizeLabels:(NSInteger)count {
@@ -675,7 +680,8 @@ float sv_calibrate_score(void *user, int flip, float dy) {
     // 3) 输出缓冲：labels 的尺寸要先问网格
     int gw = 0, gh = 0;
     if (stereo_analyze_grid((int)in.workWidth, (int)in.workHeight, &gw, &gh) != 0) return NO;
-    stereo_blob *blobs = [analysis resizeBlobs:(request.maxBlobs > 0 ? request.maxBlobs : 24)];
+    const NSInteger cap = request.maxBlobs > 0 ? request.maxBlobs : 24;
+    stereo_blob *blobs = [analysis resizeCBlobs:cap];
     unsigned char *labels = [analysis resizeLabels:(NSInteger)gw * (NSInteger)gh];
 
     stereo_image li{};
@@ -721,6 +727,7 @@ float sv_calibrate_score(void *user, int flip, float dy) {
         return NO;
     }
 
+    [analysis fillFromCBlobs:blobs count:(NSInteger)fout.analysis.blob_count];
     analysis.blobCount = fout.analysis.blob_count;
     analysis.gridWidth = fout.analysis.grid_width;
     analysis.gridHeight = fout.analysis.grid_height;
