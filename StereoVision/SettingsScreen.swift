@@ -83,12 +83,6 @@ struct SettingsScreen: View {
                     LabeledContent("Depth map",
                                    value: "\(Int(device.depthSize.width))×\(Int(device.depthSize.height))")
                 }
-
-                Section("C++ core") {
-                    Button("在最新一帧上跑一次 CPU SGM") { intents.runCoreSelfTest() }
-                    Text("Swift → ObjC++ 中间层 → 纯 C 接口 → C++ 算法。结果会显示在 HUD 左上角。")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

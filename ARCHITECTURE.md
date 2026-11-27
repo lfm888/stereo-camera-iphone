@@ -92,7 +92,9 @@ Shaders.metal                 GPU kernel（iOS 上的快路径）
 
 | 文件 | 行 | 职责 | 关键成员 |
 |---|---|---|---|
-| `AppModel.swift` | 748 | `@Observable` 状态聚合 + 每帧管线调度 + 意图实现 | `Pipeline`（`stereo`/`depthData`/`finish`/`diagnostics`）、`AppModel`（`start`/`setSource`/`calibrate`/`measure`/`captureTarget`/`updateDraft→apply`）、契约类型 `CaptureUIState`/`SettingsDraft`/`DeviceInfo`/`DiagnosticsSnapshot`*、协议 `CaptureIntents`/`SettingsIntents` |
+| `AppModel.swift` | 356 | `@Observable` 状态聚合 + 接线 + 意图实现 | `start`/`setSource`/`calibrate`/`measure`/`captureTarget`/`metadata`/`outputSize` + `CaptureIntents`/`SettingsIntents` 的实现 + 只读视图 `ui`/`diagnostics`/`draft`/`device` |
+| `Pipeline.swift` | 138 | 每帧后台管线与报告类型 | `PipelineSettings`/`PipelineKind`/`StageTimings`/`FrameReport`/`FrameStore`/`Pipeline`（`stereo`/`depthData`/`timings(of:)`/`finish`） |
+| `Contracts.swift` | 247 | 共享词汇 + 界面契约 + 诊断值类型（界面层唯一能看到的东西） | `ViewMode`/`Matcher`/`DisplayOrientation`、`SettingsDraft`/`DeviceInfo`/`CaptureUIState`、`CaptureIntents`/`SettingsIntents`、`GpuReport`/`DiagnosticsSnapshot` |
 | `StereoEngine.swift` | 479 | Metal 管线 + C++ 调用 + `StereoFrame`/`DepthTarget` | `stereo`（全 GPU）、`stereoCPU`（C++ 匹配+深度）、`calibrate`+`score`、`depthData`、`geometry`、`encodeRectify`/`encodeSGM`/`encodeMatch` |
 | `CameraController.swift` | 213 | AVFoundation 会话：双摄/系统深度、format 选择、同步输出 | `start`/`stop`、`makeStereo`/`makeDepth`、`dataOutputSynchronizer` |
 | `Calibration.swift` | 157 | **第 1 步**：只向系统要参数，不做几何 | `CalibrationSource.intrinsics(of:fov:size:)`、`.calibration(of:)`、`.extrinsics(from:to:)`、`.rig(wide:ultra:)`、`.depthIntrinsics` |
@@ -114,74 +116,74 @@ Shaders.metal                 GPU kernel（iOS 上的快路径）
 
 ```
 StereoVisionApp                        ContentView.swift
-└─ ContentView                         ContentView.swift:17
-   └─ AppModel()                       AppModel.swift:452
-      ├─ StereoEngine(device:)         StereoEngine.swift:148  → 9 条 PSO、3 个 Slot 纹理、SVStereoCore
-      ├─ Pipeline(engine:)             AppModel.swift:263    → FrameStore、Analyzer、PipelineSettings
-      ├─ Renderer(device:store:)       Renderer.swift:41     → 显示/点云 PSO、labelTex、纹理缓存
-      ├─ Capture()                     Capture.swift:11
-      ├─ CameraController()            CameraController.swift:45
+└─ ContentView                         ContentView.swift
+   └─ AppModel()                       AppModel.swift
+      ├─ StereoEngine(device:)         StereoEngine.swift  → 9 条 PSO、3 个 Slot 纹理、SVStereoCore
+      ├─ Pipeline(engine:)             AppModel.swift    → FrameStore、Analyzer、PipelineSettings
+      ├─ Renderer(device:store:)       Renderer.swift     → 显示/点云 PSO、labelTex、纹理缓存
+      ├─ Capture()                     Capture.swift
+      ├─ CameraController()            CameraController.swift
       ├─ 接线（onStereo/onDepth/onDevices/onError/publish）
-      └─ watchOrientation()            AppModel.swift:470   → push{orient}
+      └─ watchOrientation()            AppModel.swift   → push{orient}
 ```
 
 **`.task` 启动相机**
 
 ```
-ContentView.body                       ContentView.swift:31   .task { await model.startCapture() }
-└─ AppModel.startCapture()             AppModel.swift:690     (CaptureIntents)
-   └─ AppModel.start()                 AppModel.swift:499
+ContentView.body                       ContentView.swift   .task { await model.startCapture() }
+└─ AppModel.startCapture()             AppModel.swift     (CaptureIntents)
+   └─ AppModel.start()                 AppModel.swift
       ├─ AVCaptureDevice.requestAccess(for: .video)
-      ├─ refreshOrientation()          AppModel.swift:483
-      └─ setSource(.stereo)            AppModel.swift:509
+      ├─ refreshOrientation()          AppModel.swift
+      └─ setSource(.stereo)            AppModel.swift
          ├─ push{ cpuMatcher = false }（写 PipelineSettings）
-         └─ CameraController.start()   CameraController.swift:63
-            └─ makeStereo()            CameraController.swift:98
+         └─ CameraController.start()   CameraController.swift
+            └─ makeStereo()            CameraController.swift
                ├─ AVCaptureMultiCamSession + 1280×720 16:9 30fps
                ├─ 两个 AVCaptureVideoDataOutput（wide / ultra）+ intrinsic matrix delivery
                ├─ AVCaptureDataOutputSynchronizer(delegate:)
                └─ onDevices?(wide, ultra)
-                  └─ StereoEngine.configure()      StereoEngine.swift:183
-                     └─ CalibrationSource.rig()    Calibration.swift:129   ← 第 1 步：读 K / R / t
+                  └─ StereoEngine.configure()      StereoEngine.swift
+                     └─ CalibrationSource.rig()    Calibration.swift   ← 第 1 步：读 K / R / t
 ```
 
 **每帧（相机数据队列）**
 
 ```
-CameraController.dataOutputSynchronizer(...)        CameraController.swift:201
+CameraController.dataOutputSynchronizer(...)        CameraController.swift
 └─ onStereo?(wide, ultra)
-   └─ Pipeline.stereo(...)                          AppModel.swift:273
+   └─ Pipeline.stereo(...)                          AppModel.swift
       ├─ PipelineSettings 取值（锁）
-      ├─ [可选] StereoEngine.calibrate(...)          StereoEngine.swift:407（仅 calibrate 标志为真时）
-      ├─ StereoEngine.stereo(...)                    StereoEngine.swift:283   ← 默认走这条（全 GPU）
-      │  ├─ inputs(...)                              StereoEngine.swift:273
-      │  │   ├─ CalibrationSource.intrinsics(of:fov:size:)   Calibration.swift:83
+      ├─ [可选] StereoEngine.calibrate(...)          StereoEngine.swift（仅 calibrate 标志为真时）
+      ├─ StereoEngine.stereo(...)                    StereoEngine.swift   ← 默认走这条（全 GPU）
+      │  ├─ inputs(...)                              StereoEngine.swift
+      │  │   ├─ CalibrationSource.intrinsics(of:fov:size:)   Calibration.swift
       │  │   └─ CVMetalTextureCacheCreateTextureFromImage
-      │  ├─ geometry(...)                            StereoEngine.swift:205
+      │  ├─ geometry(...)                            StereoEngine.swift
       │  │   └─ SVRectification.solve()              Bridge → stereo_rectify_geometry → core/src/geometry.cpp
       │  └─ 一条 command buffer：
       │     encodeRectify ×2 → census ×2 → encodeSGM(costVolume, sgmPath×4, wtaRight, wtaLeft)
       │     → toDepth → unrectifyDepth               （kernel 全在 Shaders.metal）
-      └─ Pipeline.finish(...)                        AppModel.swift:327
+      └─ Pipeline.finish(...)                        AppModel.swift
          ├─ store.latest = frame
-         ├─ Analyzer.analyze(_:using:)               Analyzer.swift:47
+         ├─ Analyzer.analyze(_:using:)               Analyzer.swift
          │  └─ SVStereoCore.analyzeDepth:into:       Bridge → stereo_analyze → core/src/analyze.cpp
-         ├─ Pipeline.diagnostics(kind, frame)        AppModel.swift:297（生成诊断表的文案）
+         ├─ Pipeline.diagnostics(kind, frame)        AppModel.swift（生成诊断表的文案）
          └─ publish(FrameReport) → dispatch 到主线程
-            └─ AppModel.apply(_:)                     AppModel.swift:661
+            └─ AppModel.apply(_:)                     AppModel.swift
 ```
 
 **显示（主线程，MTKView 每帧）**
 
 ```
-Renderer.draw(in:)                        Renderer.swift:87
-├─ Renderer.uploadLabels(model.analysis)  Renderer.swift:105
-├─ Renderer.encode(...)                   Renderer.swift:114
+Renderer.draw(in:)                        Renderer.swift
+├─ Renderer.uploadLabels(model.analysis)  Renderer.swift
+├─ Renderer.encode(...)                   Renderer.swift
 │  └─ displayFragment（Shaders.metal）← 标准模式 = mode 0，只显示相机图
-└─ AppModel.captureTarget()               AppModel.swift:633（既没拍照也没录像时立刻返回 nil）
+└─ AppModel.captureTarget()               AppModel.swift（既没拍照也没录像时立刻返回 nil）
 
-OverlayView(state:)                       OverlayView.swift:6   （准星读数 / 面块框 / 点选气泡）
-HUD(state:)                               CaptureScreen.swift:72
+OverlayView(state:)                       OverlayView.swift   （准星读数 / 面块框 / 点选气泡）
+HUD(state:)                               CaptureScreen.swift
 ```
 
 标准模式本身只是 `ViewMode.standard`（默认值）→ `shaderIndex == 0`，没有额外分支。
@@ -189,13 +191,14 @@ HUD(state:)                               CaptureScreen.swift:72
 ### 4.2 打开诊断界面
 
 ```
-SidePanel 按钮                             CaptureScreen.swift:162   showDiagnostics = true
-└─ ContentView 的 .sheet                   ContentView.swift:40
-   ├─ 取数：AppModel.diagnostics            AppModel.swift:435        （只读快照，值类型）
-   │  ← gpuReport ← AppModel.apply(_ r: FrameReport) ← FrameReport.stages ← Pipeline.diagnostics
-   └─ DiagnosticsScreen(snapshot:onDismiss:)  DiagnosticsScreen.swift:59
+SidePanel 按钮                             CaptureScreen.swift   showDiagnostics = true
+└─ ContentView 的 .sheet                   ContentView.swift
+   ├─ 取数：AppModel.diagnostics            （只读快照，值类型）
+   │  ← gpuReport(kind/timings) ← AppModel.apply(_ r: FrameReport) ← FrameReport.kind/timings
+   ├─ 文案：PipelineKind.rows(_:)            DiagnosticsScreen.swift   ← 诊断页自己生成
+   └─ DiagnosticsScreen(snapshot:onDismiss:)  DiagnosticsScreen.swift
       ├─ 概览 / GPU 内存：直接读 snapshot
-      ├─ 各阶段表：ForEach(snapshot.stages)  ← Pipeline.diagnostics(AppModel.swift:297) 每帧生成
+      ├─ 各阶段表：ForEach(PipelineKind.rows(timings))  ← 数字来自管线，文案来自诊断页
       └─ Done → onDismiss() → showDiagnostics = false
 ```
 
@@ -204,28 +207,28 @@ SidePanel 按钮                             CaptureScreen.swift:162   showDiagn
 ### 4.3 打开设置界面 → 改一个参数
 
 ```
-SidePanel 按钮                             CaptureScreen.swift:165   showSettings = true
-└─ ContentView 的 .sheet                   ContentView.swift:32
+SidePanel 按钮                             CaptureScreen.swift   showSettings = true
+└─ ContentView 的 .sheet                   ContentView.swift
    ├─ 进参数（都是在主线程算好的值）：
-   │   AppModel.draft                     AppModel.swift:401   当前值 → SettingsDraft
-   │   AppModel.device                    AppModel.swift:417   DeviceInfo
+   │   AppModel.draft                     AppModel.swift   当前值 → SettingsDraft
+   │   AppModel.device                    AppModel.swift   DeviceInfo
    │   AppModel.overlayAlpha
-   └─ SettingsScreen(draft:device:overlayAlpha:intents:onDismiss:)   SettingsScreen.swift:10
+   └─ SettingsScreen(draft:device:overlayAlpha:intents:onDismiss:)   SettingsScreen.swift
 
 拖动任何一条滑杆 / 切换任何一个开关
-└─ 只改 SettingsScreen 自己的 @State var draft     SettingsScreen.swift:15   ← 不进管线
+└─ 只改 SettingsScreen 自己的 @State var draft     SettingsScreen.swift   ← 不进管线
 
 例外：Overlay opacity
-└─ SettingsIntents.setOverlayAlpha → AppModel.overlayAlpha  AppModel.swift:745
+└─ SettingsIntents.setOverlayAlpha → AppModel.overlayAlpha  AppModel.swift
    （纯显示参数，即时生效；Renderer 下一帧读取）
 
 点 Apply
-└─ SettingsIntents.apply(draft) → AppModel.apply(_ d: SettingsDraft)   AppModel.swift:720
+└─ SettingsIntents.apply(draft) → AppModel.apply(_ d: SettingsDraft)   AppModel.swift
    ├─ 写 10 个 private(set) 属性（minZ/maxZ/uniqueness/maxDisparity/matcher/lrCheck/p1/p2/yOffset/flip）
    └─ 一次 push{...} 写进 PipelineSettings（不是 11 个 didSet 各推一次）
 
 下一帧生效位置
-├─ maxDisparity / p1 / p2 / uniqueness / lrCheck → StereoEngine.encodeSGM   StereoEngine.swift:244
+├─ maxDisparity / p1 / p2 / uniqueness / lrCheck → StereoEngine.encodeSGM   StereoEngine.swift
 │  （CPU 后端还会 SVStereoCore.configure 重新分配 C++ 缓冲）
 ├─ matcher   → StereoEngine.stereo 里的分支（.sgm → encodeSGM，.block → encodeMatch）
 ├─ minZ/maxZ → DepthParams → toDepth；以及 Shaders.metal 的着色映射
@@ -251,7 +254,7 @@ BGRA 双帧 ──GPU rectify──> 640×360 左右图 ──Metal SGM──> �
 | 1 | 块匹配后端 `Matcher.block` | `Shaders.metal` 的 `match` kernel（60 行）+ `StereoEngine.encodeMatch` + `stereo()` 里的分支；它同时被 `calibrate` 的 GPU 打分复用 | 这个后端还用得上吗？砍掉它要先把标定打分换成别的代价函数 |
 | 2 | 参数结构体两份 | `RectParams`/`MatchParams`/`DepthParams`/`SGMParams` 在 `StereoEngine.swift` 末尾与 `Shaders.metal` 各写一份，没有编译期校验 | 是否值得合并进一个共享头（C 头可以被 MSL/Swift 同时引用） |
 | 3 | 两份标定打分 | `StereoEngine.score`（GPU，App 在用）与 `core/src/calibrate.cpp` 的 CPU 打分（只有非 Apple 平台 + 测试在用） | 后者是否只保留给"跨平台"？如果永远只有 iOS，可以删掉 CPU 打分只留搜索 |
-| 4 | `AppModel.runCoreSelfTest` | ~45 行 + 设置页一个按钮；功能上已被第 4 个深度来源（`cpuCore`）替代 | 还能删吗 |
+| 4 | ~~`AppModel.runCoreSelfTest`~~ | **已删除**（设置页那个"跑一次 CPU SGM"按钮一并去掉）；功能由第 4 个深度来源 `cpuCore` 承担 | — |
 | 5 | 两条系统深度分支 | `DepthSource.apple` / `.lidar` + `StereoEngine.depthData`（~60 行）+ `CameraController.makeDepth`（~45 行） | 如果只用自研双目，这两条可以整条删掉 |
 | 6 | `CalibrationSource.calibration(of:)` | 设备级读法，只在 `rig()` 里用一次；每帧真正用的是 `intrinsics(of:fov:size:)` | 两者能否合一 |
 | 7 | `Renderer` 的矩阵工具 | `perspective`/`translate`/`rotateX/Y/Z`（~25 行）只服务点云视图 | 值得留 |
