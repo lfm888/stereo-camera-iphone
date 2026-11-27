@@ -56,10 +56,8 @@ struct DiagnosticsSnapshot {
 ///
 /// 存在的理由很实际：把 SGM 从 Metal 换成 C++ 之后，GPU 上只剩矫正、视差转深度、
 /// 深度回转与显示；光看帧率看不出是哪个阶段变慢、GPU 有没有真的闲下来。
-struct DiagnosticsView: View {
+struct DiagnosticsScreen: View {
     let snapshot: DiagnosticsSnapshot
-    /// 关掉自己。诊断页本身不持有任何其他输入。
-    let onDismiss: () -> Void
 
     private var r: DiagnosticsSnapshot { snapshot }
 
@@ -108,9 +106,11 @@ struct DiagnosticsView: View {
                         .foregroundStyle(.secondary)
                 }
             }
+            .scrollContentBackground(.hidden)
             .navigationTitle("GPU / CPU 诊断")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { Button("Done", action: onDismiss) }
         }
+        // 它是盖在预览上的叠加面板（不是 sheet），所以自己铺一层半透明底。
+        .background(.black.opacity(0.88))
     }
 }
