@@ -6,6 +6,9 @@ iPhone 后置双摄（广角 + 超广角）做实时立体匹配，测出每个�
 
 > 本分支删掉了语义分割模型（CoreML）与 Bird's-eye 视图，只用传统方法（Census + SGM）算深度。
 > 重构的完整过程、取舍与踩坑记录在 [`test.md`](test.md)；本文只回答「这套代码怎么组织的、为什么」。
+> **文件清单与调用链以 [`ARCHITECTURE.md`](ARCHITECTURE.md) 为准**——本文下面 §0 的目录树写在
+> 拆分 Swift 之前，已经滞后（`Analyzer/Contracts/Pipeline/CaptureScreen/SettingsScreen`
+> 与 `core/` 下的 geometry/rectify/sample/analyze/cloud/calibrate/params 都是后来加的）。
 
 ---
 
@@ -224,20 +227,19 @@ libstereo_core.a  =  sgm.o  +  stereo_c_api.o
 
 **上层接入时通常只需要 `stereo_c_api.h` + `.a`**；`sgm.hpp` 只在编译 C++ 核心和测试时用到。
 
-## Q10. 为什么 `.a` 做成独立的 `StereoCore` target？
+## Q10. iOS 上 `core/` 是独立的 `StereoCore` target 吗？
 
-`project.yml` 里两个 target：
+**不是。** 现在只有一个 target：`StereoVision`（app），它的 `sources` 直接包含
+`StereoVision/`、`core/src`、`core/include`（头文件 `buildPhase: none`）。
 
-```yaml
-StereoCore:    type: static-library    # core/src + core/include，Apple clang 编译
-StereoVision:  type: application
-               dependencies: [ StereoCore ]
-```
+曾经试过拆成静态库（`StereoCore: type: static-library`），但：
+1. XcodeGen 不认 `static-library` 这个写法（正确是 `library.static`），那个 spec 从来没生效过；
+2. iOS 侧没有收益——产物最终都进 `.app`。
 
-好处：`core/` 的编译设置（C++ 标准、异常、头搜索路径）与 App 解耦，将来换 XCFramework
-或给别的 App 复用只改一行依赖。
-
-注意：App target 的 `HEADER_SEARCH_PATHS` 要保留——`Bridge/*.mm` 需要
+跨平台复用靠的是**同一份源码 + `core/CMakeLists.txt`**（Windows/Linux 出 `libstereo_core.a`），
+与 Xcode target 结构无关。另外**工程文件已不再提交**：CI 每次用
+`xcodegen generate --spec project.yml` 生成，`scripts/check_xcodeproj_sources.sh`
+保证不漏文件。App target 的 `HEADER_SEARCH_PATHS` 仍需保留——`Bridge/*.mm` 要
 `#include "stereo/stereo_c_api.h"`。
 
 ## Q11. 怎么构建和验证？
@@ -376,8 +378,8 @@ kernel 的耗时（要拆得用 `MTLCounterSampleBuffer`）。C++ 路径天然�
 | # | 事项 | 说明 |
 |---|---|---|
 | 1 | 真机测 C++ 路径的 `CPU ms` | 唯一还缺的实测数据 |
-| 2 | `match`（5×5 块匹配）与 `calibrate` 的 C++ 版 | 自动标定现在仍走 Metal |
-| 3 | `rectify` / `unrectifyDepth` 搬 C++ | 那时 `C++` 来源才是真正「零 Metal」的后端，可直接移植桌面 |
+| 2 | `match`（5×5 块匹配）的 C++ 版 | `calibrate` 的**搜索**已搬 C++（打分仍走 Metal） |
+| 3 | ~~`rectify` / `unrectifyDepth` 搬 C++~~ | **已完成**：`core/src/rectify.cpp`；`stereo_process_frame` 可整条 CPU 跑 |
 | 4 | `census` / `wta` 钳位偏移表 + `sgmPath` SIMD | 见 Q14 的优化顺序 |
 | 5 | Windows exe / Linux deb 的 CLI | `.a` 已经能出，缺一个读图的 CLI |
 
@@ -390,3 +392,34 @@ kernel 的耗时（要拆得用 `MTLCounterSampleBuffer`）。C++ 路径天然�
 - `core/` 不允许 include Apple 头（见 Q3）。
 - 不允许 C++ 异常越过 `stereo_c_api.h`（Swift 无法展开 C++ 异常）。
 - 提交前自查：删掉的符号在 Swift 侧是否还有引用（本地没有 Swift 编译器，只能靠 grep + CI）。
+
+---
+
+# 七、打包边界
+
+## Q18. iOS 上能不能把整条流水线打包成一个 `stereo_process_frame`？
+
+**不能，而且在 iOS 上能打包的只有 `toDepth + unrectify`。** 判据不是"哪几步挨着"，
+而是三个边界：
+
+| 步骤 | iOS 上在哪 | 能否打包 | 原因 |
+|---|---|---|---|
+| 取相机参数 | Swift / AVFoundation | ❌ | 平台 API，C++ 没这个能力 |
+| 极线矫正 | GPU（矩阵来自 C++） | ❌ | GPU 更快；而且**矫正后的两张纹理还被 Rectified pair / Anaglyph 视图消费** |
+| 匹配 SGM | C++（`stereo_match` 内部已含 census/cost/sgm×4/wta 五小步） | ❌ 不该 | **视差的生产者可能换人**（ONNX / CoreML），焊进 C++ 打包函数就把替换入口锁死了 |
+| toDepth + unrectify | C++ | ✅ | 纯算术，无平台交互，两者紧邻 |
+| 连通域分析 | C++，但由 `Pipeline.finish` 调用 | ❌ 不该 | **三条管线共用**（Metal / C++ / 系统深度）；焊进 C++ 专用路径会让另两条路再单独调一次 |
+
+所以分界线是三条，而不是"一个全流程函数"：
+
+```
+（平台侧）产生视差  ‖  （C++）视差 → 深度 → 回转  ‖  （共用）连通域分析
+        ↑ 可替换点            ↑ 唯一该打包的一段          ↑ 保持独立
+   SGM / ONNX / 别的
+```
+
+- `stereo_process_frame`（core 里那条全流程）只服务"整条 CPU 跑"的平台：Windows / Linux / Qt。
+- iOS 的 CPU 路径仍是四段：系统参数 → GPU 矫正 → C++ 匹配 → C++ 深度/回转 → 共用分析。
+- 顺带一个便利：**Disparity 视图是从 `depth` 反算的**（`1/z` 线性映射），所以视差不必离开
+  C++；将来换 ONNX 时，模型输出一个 `float* disp` 直接喂给 `stereo_disparity_to_depth`，
+  下游一行都不用改。
