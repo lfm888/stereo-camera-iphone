@@ -7,6 +7,7 @@ import os
 // 每帧在相机数据队列上跑的管线（不含界面、不含 @Observable）。
 //
 //   相机回调 → Pipeline.stereo / depthData → StereoEngine 出一帧 → finish()
+//   （引擎的后端组合由 PipelineSettings.stereoMode 决定，流程只有一条）
 //            → C++ 深度分析 → publish(FrameReport) → AppModel.apply（主线程）
 //
 // 原来和 AppModel 写在同一个文件里。拆出来的好处：
@@ -120,7 +121,7 @@ final class Pipeline: @unchecked Sendable {
             settings.withLock { $0.flip = c.flip; $0.yOffset = c.dy }
             cal = c
         }
-        guard let f = s.cpuMatcher ? engine.stereoCPU(wide, ultra, s) : engine.stereo(wide, ultra, s) else { return }
+        guard let f = engine.processStereoFrame(wide, ultra, s, mode: s.stereoMode) else { return }
         finish(f, cal, s.cpuMatcher ? .cpuStereo : .metalStereo)
     }
 
