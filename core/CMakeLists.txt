@@ -32,6 +32,31 @@ enable_language(C)
 add_executable(c_api_smoke tests/c_api_smoke.c)
 target_link_libraries(c_api_smoke PRIVATE stereo_core)
 
+# 每个公开 C 头都必须**自包含**：生成一个只 include 它的 .c，用纯 C 编译器编一遍。
+# 这是拆头（stereo_types.h / stereo_match.h / …）的回归保护：漏一个 #include 就当场失败。
+set(STEREO_PUBLIC_HEADERS
+    stereo_types.h
+    stereo_context.h
+    stereo_match.h
+    stereo_rectify.h
+    stereo_analyze.h
+    stereo_export.h
+    stereo_calibrate.h
+    stereo_params.h
+    stereo_pipeline.h
+    stereo_c_api.h
+)
+set(STEREO_HEADER_SELFCHECK_SRCS)
+foreach(hdr IN LISTS STEREO_PUBLIC_HEADERS)
+    set(gen "${CMAKE_CURRENT_BINARY_DIR}/header_selfcheck/${hdr}.c")
+    file(WRITE "${gen}" "#include <stereo/${hdr}>
+")
+    list(APPEND STEREO_HEADER_SELFCHECK_SRCS "${gen}")
+endforeach()
+add_library(stereo_header_selfcheck OBJECT ${STEREO_HEADER_SELFCHECK_SRCS})
+target_include_directories(stereo_header_selfcheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+set_target_properties(stereo_header_selfcheck PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON)
+
 if (MSVC)
     # 逐位一致的前提：不合并 FMA、不用快速数学
     target_compile_options(stereo_core PRIVATE /W4 /fp:precise)
