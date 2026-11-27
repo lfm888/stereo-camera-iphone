@@ -23,10 +23,10 @@ core/tests                    C++ 侧全部测试（Windows/Linux/macOS 都跑�
 Shaders.metal                 GPU kernel（iOS 的快路径）
 ```
 
-四条硬规矩：
+五条硬规矩：
 
 1. `core/` 不许 include 任何 Apple 头；`Swift` 不许 include 任何 C++ 头。
-2. `core/include/stereo/*.hpp` 只给 C++ 与桥接层看；`stereo_c_api.h` 是唯一的 C 契约。
+2. `core/include/stereo/*.hpp` 只给 C++ 实现与 C++ 测试看；Bridge 只 include `stereo_c_api.h`（它是唯一的 C 契约）。
 3. 界面层只拿**值类型**（`CaptureUIState` / `DiagnosticsSnapshot` / `DeviceInfo`）和**协议**（`CaptureIntents` / `SettingsIntents`）——"诊断页不能偷改状态"是编译器保证的。
 4. **工程文件不提交**：`StereoVision.xcodeproj` 由 CI 用 `xcodegen generate --spec project.yml` 生成，`scripts/check_xcodeproj_sources.sh` 保证不漏文件。增删源文件只动文件本身。
 5. **目录红线**（`stereovision_agent.md` §0 的 grep 验收）：`UI/` 不 import AVFoundation/MetalKit、不出现 `StereoEngine`/`SVStereoCore`；`Contracts/` 不 import SwiftUI/AVFoundation；`Engine/` 不反向依赖 UI/App/Rendering/Analysis。唯一例外：`Engine/Input` 与 `Engine/Depth` 消费 `Camera/` 的**标定数据**（`Intrinsics`/`CameraRig`/`CameraCalibrationReader`），不涉及会话与设备。
@@ -48,7 +48,7 @@ Shaders.metal                 GPU kernel（iOS 的快路径）
 | | `stereo_sample_depth` | 归一化矩形内的第 q 分位数 |
 | 导出 | `stereo_point_cloud` / `stereo_point_cloud_capacity` / `stereo_depth_filter` / `stereo_depth_to_u16_mm` / `stereo_copy_depth` | PLY 点云、深度裁剪、16 位毫米打包、跨度拷贝 |
 | 自动标定 | `stereo_calibrate`（CPU 全流水线）/ `stereo_calibrate_search`（平台提供打分回调） | 在 flip×dy 上搜索行对齐最好的参数 |
-| 全流水线 | `stereo_process_frame` | **第 2..5 步一条龙**，给非 Apple 前端；iOS 不走它（见 §6.1） |
+| 全流水线 | `stereo_process_frame` | **第 2..5 步一条龙**，给非 Apple 前端；iOS 不走它（原因见 FAQ Q18） |
 | 参数表 | `stereo_param_count` / `stereo_param_table` / `stereo_param_find` | 名称/分组/范围/步长/默认值/单位/枚举（**唯一真源**，见 §1.3） |
 
 ### 1.2 实现

@@ -1,4 +1,4 @@
-# StereoVision（`test` 分支）— C++ + C/ObjC + Swift 三层重构
+# StereoVision — C++ / C-ObjC / Swift 三层结构
 
 iPhone 后置双摄（广角 + 超广角）做实时立体匹配，测出每个像素的距离（`Z = f·B/d`）。
 **本分支把算法从 Swift/Metal 抽成一个跨平台 C++ 核心**，iOS 只是它的一个使用者：
@@ -82,9 +82,11 @@ StereoVision/                      ③ Swift 前端
 编译产物：
 
 ```
-core/CMakeLists.txt ──▶ libstereo_core.a   （含 sgm.o + stereo_c_api.o）
-StereoCore (Xcode)  ──▶ libStereoCore.a    （同一批源码，Apple clang 编译）
+core/CMakeLists.txt ──▶ libstereo_core.a   （桌面 / 非 Apple 平台的静态库）
+iOS App target       ──▶ 直接编译 core/src（没有独立的 StereoCore target，见 Q10）
 ```
+
+源文件清单以 `core/CMakeLists.txt` 的 `add_library(stereo_core ...)` 为准，本文不重复列。
 
 ---
 
@@ -96,9 +98,11 @@ StereoCore (Xcode)  ──▶ libStereoCore.a    （同一批源码，Apple clan
 `extern "C"` 函数声明，不含任何 C++ 语法与 C++ 头文件依赖，所以 C、Objective-C++（`.mm`）、
 Swift 都能直接接入。
 
-**`stereo_c_api.cpp`：它的实现与桥接层。** 负责定义 `struct stereo_context` 的内部状态
-（缓冲区、配置、错误串）、跨帧复用缓冲区、校验入参与格式/步长转换，然后在内部调用
-`sgm.hpp` / `sgm.cpp` 的 C++ 算法。
+**门面的实现**：定义 `struct stereo_context` 的内部状态（按领域分组、跨帧复用缓冲区）、
+校验入参与格式/步长转换，然后调用 `stereo::` 里的 C++ 算法。它负责的是**翻译**
+（参数校验、POD ↔ C++ 类型、缓冲管理），算法本体不在这里。具体文件见
+`core/CMakeLists.txt` 的源文件列表；跨平台能力面与 iOS 使用面的差别见
+`ARCHITECTURE.md` §2。
 
 ## Q2. `stereo_c_api.cpp` 是不是把算法又实现了一遍？
 
@@ -106,34 +110,20 @@ Swift 都能直接接入。
 
 | | `sgm.hpp` | `stereo_c_api.h` |
 |---|---|---|
-| 函数数 | 8 个 | 2 个 |
-| 一个函数干几件事 | 1 件（`census` 就只是 census） | 6 件（census×2 → cost → sgm×4 → wtaR → wtaL） |
+| 一个函数干几件事 | 一件（`census` 就只是 census） | 一整段（census×2 → cost → sgm×4 → wtaR → wtaL） |
 | 输入 | 已备好的 `float* luma` / `uint64_t*` 缓冲区 | 两幅**图**（5 种像素格式之一） |
 | 缓冲区谁分配 | **调用方** | **库自己**（藏在 context 里跨帧复用） |
 | 有无状态 | 无（纯函数） | 有（句柄 + 配置 + 错误串） |
 
-`stereo_c_api.cpp` 里真正的算法代码只有 6 行：
+门面里与算法有关的动作只有「按顺序把 `stereo::` 的零件函数串起来」；
+算法本体（逐像素、逐视差）全在 `src/` 的算法文件里。
 
-```cpp
-stereo::census(ctx->luma_l.data(), W, H, ctx->census_l.data());
-stereo::census(ctx->luma_r.data(), W, H, ctx->census_r.data());
-stereo::cost_volume(ctx->census_l.data(), ctx->census_r.data(), p, ctx->cost.data());
-stereo::sgm_all_paths(ctx->cost.data(), ctx->sum.data(), ctx->luma_l.data(), p);
-stereo::wta_right(ctx->sum.data(), p, ctx->disp_r.data());
-stereo::wta_left(ctx->sum.data(), ctx->disp_r.data(), p, ctx->disp_l.data());
-```
+除匹配组合外，门面剩下的工作都与算法无关：把 `stereo_create()` 翻成 `new stereo_context`、
+按尺寸复用缓冲区（「首帧之后零分配」的来源）、把像素格式统一成算法要的形状、
+把 `std::bad_alloc` / C++ 异常转成错误码与错误串——这些都不能直接出现在 C ABI 上。
 
-剩下 250 行干的全是跟算法无关的事：
-
-| 干什么 | 为什么必须在 C++ 里 |
-|---|---|
-| `stereo_create()` → `new stereo_context` | C 没有 `new`，而 context 里是 `std::vector` |
-| `ensure()` 按尺寸复用缓冲区 | 要 `std::vector::assign`；这是「首帧之后零分配」的来源 |
-| `to_luma()` 统一 BGRA/RGBA/RGB/GRAY | 格式适配，不是算法 |
-| `try/catch(std::bad_alloc)` + `err[256]` | 异常不能越过 C ABI，必须转成错误码 |
-
-**类比**：`sgm.hpp` 是零件清单（8 个齿轮），`stereo_c_api.h` 是总成图纸（1 个变速箱）。
-`stereo_c_api.cpp` 不是重造零件，是**把零件按正确顺序装起来**。
+**类比**：`sgm.hpp` 是零件清单，`stereo_c_api.h` 是总成图纸；门面不是重造零件，
+是**把零件按正确顺序装起来**。
 
 ## Q3. 为什么 `core/` 里不允许 include Apple 头？
 
@@ -235,7 +225,7 @@ stereo_create        FOUND
 
 **为什么不干脆让 Swift 直接调 C？** 可以，但 Swift 就得自己写
 `deinit { stereo_destroy(ctx) }` 包装类，还要手搓 `stereo_image` 的 `UnsafePointer`。
-ObjC++ 里写这段是 134 行，Swift 里写会更长且更容易漏 release。
+ObjC++ 里写这段很短，Swift 里写会更长且更容易漏 release。
 
 ---
 
@@ -247,15 +237,17 @@ ObjC++ 里写这段是 134 行，Swift 里写会更长且更容易漏 release。
 （`c_api_smoke`，用来证明 C 头真的能被 C 编译器读）。
 
 ```
-libstereo_core.a  =  sgm.o  +  stereo_c_api.o
-                     ↑ 算法       ↑ C 门面（未修饰的 stereo_* 符号）
+libstereo_core.a  =  core/src 的算法目标文件（按领域分文件）
+                     + C 门面（未修饰的 stereo_* 符号）
 ```
+
+具体清单看 `core/CMakeLists.txt` 的 `add_library(stereo_core ...)`。
 
 | 改动 | 影响 |
 |---|---|
 | 改 `sgm.cpp` / `sgm.hpp` | 只影响 C++ 核心与测试；上层 `.mm` 不需要改（它只看 C 接口） |
 | 改 `stereo_c_api.h` / `.cpp` | 影响所有包含它的编译单元：`Bridge/*.mm`、`c_api_smoke.c`、`golden_test`，需重编并检查调用方接口 |
-| 改 `CMakeLists.txt` | 只影响桌面构建；iOS 侧是 `project.yml` 的 `StereoCore` target 在编同一批源码 |
+| 改 `CMakeLists.txt` | 只影响桌面构建；iOS 侧是 App target 直接编同一批源码（见 Q10） |
 
 **上层接入时通常只需要 `stereo_c_api.h` + `.a`**；`sgm.hpp` 只在编译 C++ 核心和测试时用到。
 
@@ -288,7 +280,7 @@ cmake --build build/core --config Release --parallel
 python tools/gen_golden.py                                # tiny 64×48 D=16（已提交）
 python tools/gen_golden.py --size full --out core/tests/golden-full
 
-# iOS
+# iOS（仅 macOS 本地调试；工程文件不入库）
 xcodegen generate && open StereoVision.xcodeproj
 ```
 
@@ -304,8 +296,9 @@ xcodegen generate && open StereoVision.xcodeproj
 ./scripts/fetch_ipa.sh   # → build/StereoVision-unsigned.ipa
 ```
 
-**注意**：CI 直接编译仓库里提交的 `.xcodeproj`，**不跑 xcodegen**。改了 `project.yml`
-必须在本地重新生成工程并提交，否则新增源码不会被编译——而且**不会报错**。
+**注意**：`.xcodeproj` **不提交**。CI 每次用 `xcodegen generate --spec project.yml` 生成工程，
+并用 `scripts/check_xcodeproj_sources.sh` 检查「仓库里的源文件」与「工程里参与编译的文件」一致，
+漏一个就当场失败。改了 `project.yml` 只要推送即可，不要在本地生成后把工程文件一起提交。
 
 ---
 
@@ -410,7 +403,7 @@ kernel 的耗时（要拆得用 `MTLCounterSampleBuffer`）。C++ 路径天然�
 | # | 事项 | 说明 |
 |---|---|---|
 | 1 | 真机测 C++ 路径的 `CPU ms` | 唯一还缺的实测数据 |
-| 2 | `match`（5×5 块匹配）的 C++ 版 | `calibrate` 的**搜索**已搬 C++（打分仍走 Metal） |
+| 2 | `Shaders.metal` 的 5×5 块匹配 kernel 的 C++ 对照 | C++ 侧没有这个 kernel；`stereo_calibrate` 的打分是另一套（Census + 逐视差汉明最小值、抽样），只服务非 Apple 平台。iOS 自动标定仍用 Metal 块匹配打分 |
 | 3 | ~~`rectify` / `unrectifyDepth` 搬 C++~~ | **已完成**：`core/src/rectify.cpp`；`stereo_process_frame` 可整条 CPU 跑 |
 | 4 | `census` / `wta` 钳位偏移表 + `sgmPath` SIMD | 见 Q14 的优化顺序 |
 | 5 | Windows exe / Linux deb 的 CLI | `.a` 已经能出，缺一个读图的 CLI |
@@ -419,7 +412,7 @@ kernel 的耗时（要拆得用 `MTLCounterSampleBuffer`）。C++ 路径天然�
 
 - **每次 CI 打包成功后立即** `./scripts/fetch_ipa.sh` 把 IPA 下载到
   `build/StereoVision-unsigned.ipa`，并报出大小与 sha256。
-- 改了 `project.yml` → 本地 `xcodegen generate` → 工程文件一起提交。
+- 改了 `project.yml` → 推送；工程文件由 CI 生成，`.xcodeproj` 不入库（见 Q11）。
 - 改了 `core/` → 必须重跑 `golden_test`；不是逐位一致就是 bug，不是「精度差异」。
 - `core/` 不允许 include Apple 头（见 Q3）。
 - 不允许 C++ 异常越过 `stereo_c_api.h`（Swift 无法展开 C++ 异常）。

@@ -1,5 +1,9 @@
 # StereoVision → 跨平台 C++ 立体匹配库：阶段结论与后续检查清单
 
+> **历史文档（勿作为现状依据）**：本文是重构过程中的阶段记录，带 `【已过时】` 的段落
+> 描述的是当时的方案（例如"提交 .xcodeproj""CI 不跑 xcodegen"），后来已被推翻。
+> 现状以 `ARCHITECTURE.md`（尤其规则 4）与 `FAQ.md` 为准。
+
 > 本文档交给本地 agent 继续工作。
 > 标记约定：**[已确认]** = 直接读过源码或 README；**[推断]** = 根据文件名、大小或上下文推测，必须核对；**[估算]** = 粗略数量级估计，必须实测。
 > 本文档作者没有读过 `Analyzer.swift`、`sgm_ref.py`、`Renderer.swift`、`AppModel.swift` 等文件（见第 12 节），凡涉及它们的内容都是推断。
@@ -398,7 +402,7 @@ float sv_depth_quantile(const float* depth, int stride, int w, int h,
 1. **不要删 `Analyzer.swift`**（§9 的推断错了）：`3D segmentation` 和 `Bird's-eye` 都不依赖分割模型，
    数据全部来自 `Analyzer.grid()` 的深度连通域。删掉它 = 删掉一个**纯传统、已写好、零模型依赖、
    且最适合搬 C++** 的模块。建议只删 `Bird's-eye`，保留 `3D segmentation`。
-2. **CI 不跑 xcodegen**：三个 workflow 都直接编译仓库里提交的 `.xcodeproj`。只改 `project.yml`
+2. **【已过时】CI 不跑 xcodegen**：三个 workflow 都直接编译仓库里提交的 `.xcodeproj`。只改 `project.yml`
    而不重新生成工程，CI 编译不到 `core/`，**而且不会报错**——只会用旧工程文件静默成功。
 3. **P2 的匹配层对拍不需要等 App 改导出**：`synthetic_scene()` 的左右图本身就是"已矫正"的输入。
    真机导出只在验证 rectify/unrectify/几何时才需要。
@@ -532,7 +536,7 @@ anaglyph, segmentation(6), radar(7), pointCloud(8)`。
 | `.github/workflows/ipa.yml` | push main（`StereoVision/**`、`Config/**`、`project.yml`）+ 手动 | **不跑 xcodegen**；可选 `with_yolo` 先导出 YOLO 再打包 |
 | `.github/workflows/export-model.yml` | push `models/*.pth` / `scripts/export_lens_seg.py` + 手动 | ubuntu 导 mlpackage → macos-15-intel 打包 IPA |
 
-→ **`.xcodeproj` 是提交进仓库的**，三个流水线都直接用它。所以 **改 `project.yml` 后必须在本地
+→ **【已过时】`.xcodeproj` 是提交进仓库的**，三个流水线都直接用它。所以 **改 `project.yml` 后必须在本地
 `xcodegen generate` 并把生成的 `.xcodeproj` 一起提交**，否则 CI 用旧工程文件，
 新增的 `core/src/*.cpp` 根本不会被编译，而且不报错。
 
@@ -649,7 +653,7 @@ cmake --build build/core --config Release
 | 3 | 删 `ViewMode.radar` + `OverlayView.radar` + `Analysis.scan` + `blob.cells` 的使用点 | 低 |
 | 4 | **保留** `ViewMode.segmentation`（建议，见 §15.1） | — |
 | 5 | `ipa.yml`：去掉 `model` job / `with_yolo` / Fetch+Unpack / `find *.mlmodelc` | 低 |
-| 6 | `project.yml` 加 `core/`（Q7 的片段），本地 `xcodegen generate`，**把 .xcodeproj 一起提交** | 中：不提交则 CI 编译不到 core |
+| 6 | **【已过时】**`project.yml` 加 `core/`（Q7 的片段），本地 `xcodegen generate`，**把 .xcodeproj 一起提交** | 中：不提交则 CI 编译不到 core |
 | 7 | App 增加导出：矫正后的左右图 + 完整 `K/R/t/MW/MU/MUp`（P3 才需要，先进 `meta.json` 省返工） | 低 |
 | 8 | `README.md` 同步（功能表、视图模式表、分割章节） | 低 |
 
@@ -708,7 +712,7 @@ cmake --build build/core --config Release
 
 | # | 事项 | 备注 |
 |---|---|---|
-| 1 | **`xcodegen generate` 并提交 `.xcodeproj`** | 本次没做：本机没有 xcodegen，也没有 Mac。这是接 `core/` 的前提，见 §15.2 Q7 |
+| 1 | **【已过时】`xcodegen generate` 并提交 `.xcodeproj`** | 本次没做：本机没有 xcodegen，也没有 Mac。这是接 `core/` 的前提，见 §15.2 Q7 |
 | 2 | `project.yml` 加 `core/src` + `core/include` + 桥接头 / C++ 标准 | 片段已写在 §15.2 Q7，等第 1 步一起做 |
 | 3 | C API（`sv_match` 等）+ 第四个深度来源「自研（C++ CPU）」 | §11 P4 |
 | 4 | App 导出矫正后左右图 + 完整 `K/R/t/MW/MU/MUp` | §11 P0 的剩余项，P3 才用得上 |
@@ -728,7 +732,7 @@ cmake --build build/core --config Release
 
 **第一次可能失败的地方**（按概率排序，供 CI 报错时对照）：
 
-1. `project.yml` 与提交的 `.xcodeproj` 不同步 —— 如果有人在 `main` 上重新生成过工程，
+1. **【已过时】**`project.yml` 与提交的 `.xcodeproj` 不同步 —— 如果有人在 `main` 上重新生成过工程，
    `test` 分支合并时会冲突；反之如果没重新生成，CI 用旧工程照样能编（但编不到 `core/`）。
 2. `ContentView` 的设置页删掉了一个 `Section`，`Form` 里的顺序变了 —— 语法上没问题，
    但注意 `Section("Stereo matching")` 后面的 `.disabled(model.source != .stereo)` 修饰符仍然挂在它身上（正确）。
@@ -905,10 +909,11 @@ CI 直接编译这个文件，所以现在**CI 仍然是绿的**，只是还没�
 
 ```sh
 xcodegen generate            # 需要 xcodegen；生成后会出现 StereoCore 静态库 target
-git add StereoVision.xcodeproj && git commit -m "chore: xcodegen 生成两 target 工程"
+# 【已过时】工程文件不再提交；CI 用 xcodegen 从 project.yml 生成
+# git add StereoVision.xcodeproj && git commit -m "chore: xcodegen 生成两 target 工程"
 ```
 
-之后 `xcodebuild` 会先编 `libStereoCore.a` 再链进 App。
+【已过时】当时打算先编 `libStereoCore.a` 再链进 App；现在只有一个 App target，直接编译 `core/src`。
 预期会有两处差异需要盯一下（我无法在本地验证）：
 
 1. `core/include` 里的头文件在静态库里可能被当成 public header 进 Headers phase —— 无害；
