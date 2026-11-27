@@ -26,8 +26,9 @@ extern "C" {
  *  1.10 增加极线矫正几何、矫正重采样、深度回转（四步管线里的第 2、4 步）
  *  1.20 增加深度图查询与分析：stereo_sample_depth / stereo_analyze
  *  1.30 增加导出用的像素运算：点云 PLY、深度裁剪 / 打包 / 跨度拷贝
- *  1.40 增加自动标定搜索：stereo_calibrate */
-#define STEREO_API_VERSION 140
+ *  1.40 增加自动标定搜索：stereo_calibrate
+ *  1.50 增加 CPU 全流水线 stereo_process_frame 与参数描述表 */
+#define STEREO_API_VERSION 150
 
 /** 不透明句柄，内部是 C++ 的 stereo_context。 */
 typedef struct stereo_context stereo_context;
@@ -346,6 +347,130 @@ typedef float (*stereo_score_fn)(void *user, int flip, float dy);
 int stereo_calibrate_search(stereo_score_fn score, void *user,
                             const stereo_calibrate_params *params,
                             stereo_calibrate_result *out);
+
+
+/* ------------------------------------------------------------------ */
+/* 参数描述表（界面用）                                                  */
+/*                                                                     */
+/* 这是"有哪些参数、范围、默认值、步长"的**唯一真源**：stereo_config_default() */
+/* 的默认值也来自这张表。Swift / Qt 界面应该按表生成滑杆，不要各写一份。      */
+/*                                                                     */
+/* 注意：表里的 min/max 是**建议给界面的范围**，不一定等于库能接受的硬范围    */
+/* （例如库接受 max_disp 4..96，而 App 的滑杆只给 32/64/96 三档）。           */
+/* ------------------------------------------------------------------ */
+
+/** 参数 id。已发布的顺序不要改，新参数往末尾加。 */
+enum stereo_param_id {
+    STEREO_PARAM_MIN_Z = 0,      /**< 深度下限（米） */
+    STEREO_PARAM_MAX_Z,          /**< 深度上限（米） */
+    STEREO_PARAM_MATCHER,        /**< 0 = SGM 4 paths，1 = 块匹配 */
+    STEREO_PARAM_MAX_DISP,       /**< 最大视差（像素） */
+    STEREO_PARAM_P1,             /**< 1 像素小台阶罚项 */
+    STEREO_PARAM_P2,             /**< 深度跳变罚项 */
+    STEREO_PARAM_LR_CHECK,       /**< 左右一致性检查 */
+    STEREO_PARAM_UNIQUENESS,     /**< 唯一性阈值 */
+    STEREO_PARAM_Y_OFFSET,       /**< 矫正行偏移（像素） */
+    STEREO_PARAM_FLIP,           /**< 交换基线方向 */
+    STEREO_PARAM_OVERLAY_ALPHA,  /**< 叠加层不透明度（纯显示） */
+    STEREO_PARAM_COUNT
+};
+
+/** 参数类型。 */
+enum stereo_param_kind {
+    STEREO_PARAM_FLOAT = 0,
+    STEREO_PARAM_INT = 1,
+    STEREO_PARAM_BOOL = 2,
+    STEREO_PARAM_ENUM = 3
+};
+
+/** 一条参数描述。字符串都是静态字面量，进程生命周期内有效。 */
+typedef struct stereo_param_desc {
+    int id;                 /**< enum stereo_param_id */
+    const char *key;        /**< 稳定标识，例如 "max_disparity" */
+    const char *label;      /**< 显示名，例如 "Max disparity" */
+    const char *group;      /**< 分组："depth" / "matching" / "display" */
+    int kind;               /**< enum stereo_param_kind */
+    float min_value;
+    float max_value;
+    float step;
+    float default_value;
+    const char *unit;       /**< "m" / "px" / ""（可为空串，不会是 NULL） */
+    const char *enum_labels;/**< kind==ENUM 时用 '|' 分隔；否则 NULL */
+} stereo_param_desc;
+
+/** 表的条目数。 */
+int stereo_param_count(void);
+
+/** 表的首地址（只读，进程生命周期内有效）。条目按界面上希望出现的顺序排列。 */
+const stereo_param_desc *stereo_param_table(void);
+
+/** 按 id 取描述；id 非法返回 NULL。 */
+const stereo_param_desc *stereo_param_find(int id);
+
+/* ------------------------------------------------------------------ */
+/* 第 2..5 步的 CPU 全流水线                                             */
+/*                                                                     */
+/* 一条函数把「矫正 → 匹配 → 深度 → 回转 → 连通域分析」串完。            */
+/* 目的：Windows / Linux 的前端不用自己重写调用顺序。                     */
+/*                                                                     */
+/* iOS 的 GPU 快路径**不走这里**：那条路径把 rectify/census/SGM/toDepth/  */
+/* unrectify 串在一个 command buffer 里，拆成回调反而更慢。               */
+/* ------------------------------------------------------------------ */
+
+/** 一次全流水线的输入。 */
+typedef struct stereo_frame_input {
+    const stereo_image *left;        /**< 原始（未矫正）左/宽相机图，任意 stereo_format */
+    const stereo_image *right;       /**< 原始右/超广角图 */
+    const stereo_rectify_input *geometry; /**< 内参/外参/工作分辨率/flip/dy */
+    const stereo_config *config;     /**< 匹配参数（NULL = 用 stereo_config_default） */
+    float min_z;                     /**< 深度有效下限（米） */
+    float max_z;                     /**< 深度有效上限（米） */
+    stereo_analyze_params analysis;  /**< 面块参数；fx/fy/cx/cy 会被矫正后的 K 覆盖 */
+    const float *center_rect;        /**< 准星矩形 {x0,y0,x1,y1} 归一化；NULL = 不算 */
+    float center_q;                  /**< 准星分位数（0.5 = 中位数） */
+} stereo_frame_input;
+
+/** 一次全流水线的输出。调用方按 work_width/height 准备缓冲。 */
+typedef struct stereo_frame_output {
+    float *disp;            /**< 可选：视差（工作分辨率，**矫正后**坐标系），NULL = 不要 */
+    int disp_stride;        /**< 像素跨度；<= 0 表示等于 work_width */
+    float *depth;           /**< 必填：深度（工作分辨率，**宽相机**坐标系，米） */
+    int depth_stride;       /**< 像素跨度；<= 0 表示等于 work_width */
+    stereo_blob *blobs;     /**< 可选：面块数组（NULL = 不要；只要 labels 时会用内部兜底数组） */
+    int blob_capacity;
+    unsigned char *labels;  /**< 可选：标签图（grid_width*grid_height 字节） */
+    stereo_analysis analysis;   /**< 面块数/网格尺寸/准星读数 */
+    stereo_intrinsics k;        /**< 矫正后的内参（给下游反投影用） */
+    float focal_baseline;       /**< fx * baseline(米) = to_depth 用的 fB */
+    int direction;              /**< +1 / -1 */
+} stereo_frame_output;
+
+/** 各阶段耗时（毫秒）。只用于诊断，传 NULL 就不计时。 */
+typedef struct stereo_frame_timings {
+    double rectify;
+    double match;
+    double depth;
+    double unrectify;
+    double analyze;
+    double total;
+} stereo_frame_timings;
+
+/**
+ * 第 2..5 步：矫正 → 匹配 → 深度 → 回转 → 连通域分析。
+ *
+ * 内部就是按顺序调用 stereo_rectify_geometry / stereo_rectify_image ×2 /
+ * stereo_match / stereo_disparity_to_depth / stereo_unrectify_depth /
+ * stereo_analyze，所以结果与手工按这个顺序调用**逐位相同**（有单测保证）。
+ *
+ * `config` 与当前 ctx 的参数相同则不会触发缓冲区重分配（稳态零分配）。
+ *
+ * `out->blobs` 与 `out->labels` **都不给**时跳过第 5 步（连通域分析），
+ * `out->analysis` 清零 —— 只想拿深度时能省掉降采样+连通域的开销。
+ *
+ * 成功返回 0。
+ */
+int stereo_process_frame(stereo_context *ctx, const stereo_frame_input *in,
+                         stereo_frame_output *out, stereo_frame_timings *timings);
 
 #ifdef __cplusplus
 } /* extern "C" */

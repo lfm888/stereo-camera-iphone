@@ -153,6 +153,73 @@ int main(void) {
         free(d2);
     }
 
+    /* ---- 参数描述表（纯 C 也要能用）---- */
+    {
+        const int n = stereo_param_count();
+        const stereo_param_desc *t = stereo_param_table();
+        int ok = (n > 0 && t != NULL);
+        for (int i = 0; ok && i < n; ++i) {
+            ok = t[i].key != NULL && t[i].label != NULL && t[i].unit != NULL &&
+                 t[i].step > 0.0f && t[i].min_value <= t[i].default_value &&
+                 t[i].default_value <= t[i].max_value;
+        }
+        snprintf(buf, sizeof(buf), "%d 条", n);
+        check("stereo_param_table 可用", ok, buf);
+        check("stereo_param_find 越界返回 NULL", stereo_param_find(9999) == NULL, "");
+    }
+
+    /* ---- 第 2..5 步的 CPU 全流水线 ---- */
+    {
+        stereo_rectify_input geo;
+        stereo_frame_input fin;
+        stereo_frame_output fout;
+        float fdisp[W * H], fdepth[W * H];
+        unsigned char flabels[W * H];
+        stereo_blob fblobs[8];
+        stereo_frame_timings ft;
+
+        memset(&geo, 0, sizeof(geo));
+        geo.wide.fx = geo.wide.fy = 200.0f;
+        geo.wide.cx = W / 2.0f;
+        geo.wide.cy = H / 2.0f;
+        geo.ultra = geo.wide;
+        geo.R[0] = geo.R[4] = geo.R[8] = 1.0f;
+        geo.t[0] = 65.0f;
+        geo.src_width = W;
+        geo.work_width = W;
+        geo.work_height = H;
+
+        memset(&fin, 0, sizeof(fin));
+        fin.left = &li;
+        fin.right = &ri;
+        fin.geometry = &geo;
+        fin.config = &cfg;
+        fin.min_z = 0.1f;
+        fin.max_z = 10.0f;
+        fin.analysis.max_blobs = 8;
+        fin.analysis.min_cells = 40;
+        fin.center_q = 0.5f;
+
+        memset(&fout, 0, sizeof(fout));
+        fout.disp = fdisp;
+        fout.disp_stride = W;
+        fout.depth = fdepth;
+        fout.depth_stride = W;
+        fout.blobs = fblobs;
+        fout.blob_capacity = 8;
+        fout.labels = flabels;
+
+        memset(&ft, 0, sizeof(ft));
+        const int prc = stereo_process_frame(ctx, &fin, &fout, &ft);
+        int dvalid = 0;
+        for (int i = 0; i < W * H; ++i) if (fdepth[i] > 0.0f) ++dvalid;
+        snprintf(buf, sizeof(buf), "深度有效 %d/%d，网格 %dx%d", dvalid, W * H,
+                 fout.analysis.grid_width, fout.analysis.grid_height);
+        check("stereo_process_frame 成功", prc == 0, buf);
+        check("stereo_process_frame 有有效深度", dvalid > 0, "");
+        check("stereo_process_frame 拒绝 NULL", stereo_process_frame(ctx, NULL, &fout, NULL) != 0, "");
+    }
+
     stereo_destroy(ctx);
     check("stereo_destroy(NULL) 安全", (stereo_destroy(NULL), 1), "");
 

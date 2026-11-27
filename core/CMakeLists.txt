@@ -22,6 +22,7 @@ add_library(stereo_core STATIC
     src/analyze.cpp
     src/cloud.cpp
     src/calibrate.cpp
+    src/params.cpp
     src/stereo_c_api.cpp
 )
 target_include_directories(stereo_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -58,6 +59,10 @@ target_link_libraries(cloud_test PRIVATE stereo_core)
 add_executable(calibrate_test tests/calibrate_test.cpp)
 target_link_libraries(calibrate_test PRIVATE stereo_core)
 
+# 第 2..5 步的 CPU 全流水线 + 参数描述表。
+add_executable(frame_test tests/frame_test.cpp)
+target_link_libraries(frame_test PRIVATE stereo_core)
+
 # 让 `ctest` / `cmake --build . --target golden_test` 之后能直接跑对拍
 enable_testing()
 add_test(NAME golden COMMAND golden_test ${CMAKE_CURRENT_SOURCE_DIR}/tests/golden)
@@ -66,3 +71,4 @@ add_test(NAME geometry COMMAND geometry_test)
 add_test(NAME analyze COMMAND analyze_test)
 add_test(NAME cloud COMMAND cloud_test)
 add_test(NAME calibrate COMMAND calibrate_test)
+add_test(NAME frame COMMAND frame_test)

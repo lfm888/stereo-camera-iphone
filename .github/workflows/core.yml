@@ -127,3 +127,19 @@ jobs:
           fi
           echo "== $BIN =="
           "$BIN"
+
+      - name: Frame test (第 2..5 步 CPU 全流水线 / 参数表)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN=""
+          for c in build/core/frame_test                    build/core/Release/frame_test.exe                    build/core/Debug/frame_test.exe; do
+            if [ -f "$c" ]; then BIN="$c"; break; fi
+          done
+          if [ -z "$BIN" ]; then
+            echo "找不到 frame_test"
+            find build/core -maxdepth 3 -type f -name "*frame*" | head -20
+            exit 1
+          fi
+          echo "== $BIN =="
+          "$BIN"

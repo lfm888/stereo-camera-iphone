@@ -12,10 +12,12 @@
 #include "stereo/calibrate.hpp"
 #include "stereo/cloud.hpp"
 #include "stereo/geometry.hpp"
+#include "stereo/params.hpp"
 #include "stereo/rectify.hpp"
 #include "stereo/sample.hpp"
 #include "stereo/sgm.hpp"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -58,6 +60,19 @@ struct stereo_context {
     std::vector<float> c_luma_r;
     std::vector<uint64_t> c_census_l;
     std::vector<uint64_t> c_census_r;
+
+    // 全流水线（stereo_process_frame）的 scratch：两张矫正图 + 视差 + 矫正坐标系深度
+    int pf_w = 0;
+    int pf_h = 0;
+    std::vector<uint8_t> pf_rect_l;
+    std::vector<uint8_t> pf_rect_r;
+    std::vector<float> pf_disp;
+    std::vector<float> pf_depth_rect;
+    std::vector<stereo_blob> pf_blobs;   // 调用方只要 labels、不要 blobs 时的兜底缓冲
+    int pf_src_w = 0;                    // 输入不是 BGRA8 时的转换缓冲尺寸
+    int pf_src_h = 0;
+    std::vector<uint8_t> pf_in_l;
+    std::vector<uint8_t> pf_in_r;
 
     char err[256] = {0};
 };
@@ -200,11 +215,12 @@ void stereo_destroy(stereo_context *ctx) { delete ctx; }
 
 void stereo_config_default(stereo_config *cfg) {
     if (cfg == nullptr) return;
-    cfg->max_disp = 64;
-    cfg->p1 = 8;
-    cfg->p2 = 96;
-    cfg->uniqueness = 0.1f;
-    cfg->lr_check = 1;
+    // 默认值来自参数描述表（core/src/params.cpp），不在这里各写一份
+    cfg->max_disp = static_cast<int>(stereo::param_default(STEREO_PARAM_MAX_DISP));
+    cfg->p1 = static_cast<int>(stereo::param_default(STEREO_PARAM_P1));
+    cfg->p2 = static_cast<int>(stereo::param_default(STEREO_PARAM_P2));
+    cfg->uniqueness = stereo::param_default(STEREO_PARAM_UNIQUENESS);
+    cfg->lr_check = static_cast<int>(stereo::param_default(STEREO_PARAM_LR_CHECK));
     cfg->threads = 0;
 }
 
@@ -605,6 +621,278 @@ int stereo_calibrate_search(stereo_score_fn score, void *user,
     out->dy = res.dy;
     out->score = res.score;
     out->evaluations = res.evaluations;
+    return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* 参数描述表                                                           */
+/* ------------------------------------------------------------------ */
+
+int stereo_param_count(void) { return stereo::param_count(); }
+
+const stereo_param_desc *stereo_param_table(void) { return stereo::param_table(); }
+
+const stereo_param_desc *stereo_param_find(int id) { return stereo::param_desc(id); }
+
+/* ------------------------------------------------------------------ */
+/* 第 2..5 步的 CPU 全流水线                                             */
+/* ------------------------------------------------------------------ */
+
+namespace {
+
+using PfClock = std::chrono::steady_clock;
+
+inline double ms_since(PfClock::time_point t0) {
+    return std::chrono::duration<double, std::milli>(PfClock::now() - t0).count();
+}
+
+/// 按工作分辨率准备全流水线的 scratch（尺寸不变就不动）。
+bool ensure_pf(stereo_context *ctx, int W, int H) {
+    if (ctx->pf_w == W && ctx->pf_h == H && !ctx->pf_rect_l.empty()) return true;
+    const size_t rect_bytes = static_cast<size_t>(W) * static_cast<size_t>(H) * 4;
+    const size_t n = static_cast<size_t>(W) * static_cast<size_t>(H);
+    try {
+        ctx->pf_rect_l.assign(rect_bytes, 0);
+        ctx->pf_rect_r.assign(rect_bytes, 0);
+        ctx->pf_disp.assign(n, 0.0f);
+        ctx->pf_depth_rect.assign(n, 0.0f);
+    } catch (const std::bad_alloc &) {
+        ctx->pf_w = ctx->pf_h = 0;
+        return false;
+    }
+    ctx->pf_w = W;
+    ctx->pf_h = H;
+    return true;
+}
+
+/// 任意 stereo_format → 紧凑 BGRA8。返回 false 表示格式不认识。
+bool convert_to_bgra8(const stereo_image &src, uint8_t *dst) {
+    const int w = src.width, h = src.height;
+    for (int y = 0; y < h; ++y) {
+        const uint8_t *row = src.data + static_cast<size_t>(y) * static_cast<size_t>(src.stride);
+        uint8_t *out = dst + static_cast<size_t>(y) * static_cast<size_t>(w) * 4;
+        switch (src.format) {
+            case STEREO_FORMAT_BGRA8:
+                std::memcpy(out, row, static_cast<size_t>(w) * 4);
+                break;
+            case STEREO_FORMAT_RGBA8:
+                for (int x = 0; x < w; ++x) {
+                    out[x * 4 + 0] = row[x * 4 + 2];
+                    out[x * 4 + 1] = row[x * 4 + 1];
+                    out[x * 4 + 2] = row[x * 4 + 0];
+                    out[x * 4 + 3] = row[x * 4 + 3];
+                }
+                break;
+            case STEREO_FORMAT_RGB8:
+                for (int x = 0; x < w; ++x) {
+                    out[x * 4 + 0] = row[x * 3 + 2];
+                    out[x * 4 + 1] = row[x * 3 + 1];
+                    out[x * 4 + 2] = row[x * 3 + 0];
+                    out[x * 4 + 3] = 255;
+                }
+                break;
+            case STEREO_FORMAT_BGR8:
+                for (int x = 0; x < w; ++x) {
+                    out[x * 4 + 0] = row[x * 3 + 0];
+                    out[x * 4 + 1] = row[x * 3 + 1];
+                    out[x * 4 + 2] = row[x * 3 + 2];
+                    out[x * 4 + 3] = 255;
+                }
+                break;
+            case STEREO_FORMAT_GRAY8:
+                for (int x = 0; x < w; ++x) {
+                    out[x * 4 + 0] = row[x];
+                    out[x * 4 + 1] = row[x];
+                    out[x * 4 + 2] = row[x];
+                    out[x * 4 + 3] = 255;
+                }
+                break;
+            default:
+                return false;
+        }
+    }
+    return true;
+}
+
+/// 按**原始图**尺寸准备 BGRA 转换缓冲（只有输入不是 BGRA8 时才用）。
+bool ensure_pf_input(stereo_context *ctx, int w, int h) {
+    if (ctx->pf_src_w == w && ctx->pf_src_h == h && !ctx->pf_in_l.empty()) return true;
+    const size_t bytes = static_cast<size_t>(w) * static_cast<size_t>(h) * 4;
+    try {
+        ctx->pf_in_l.assign(bytes, 0);
+        ctx->pf_in_r.assign(bytes, 0);
+    } catch (const std::bad_alloc &) {
+        ctx->pf_src_w = ctx->pf_src_h = 0;
+        return false;
+    }
+    ctx->pf_src_w = w;
+    ctx->pf_src_h = h;
+    return true;
+}
+
+}  // namespace
+
+int stereo_process_frame(stereo_context *ctx, const stereo_frame_input *in,
+                         stereo_frame_output *out, stereo_frame_timings *timings) {
+    if (ctx == nullptr) return -1;
+    if (in == nullptr || out == nullptr) return fail(ctx, "process_frame: in/out is NULL");
+    if (!valid_image(in->left) || !valid_image(in->right)) {
+        return fail(ctx, "process_frame: left/right image invalid");
+    }
+    if (in->geometry == nullptr) return fail(ctx, "process_frame: geometry is NULL");
+    if (out->depth == nullptr) return fail(ctx, "process_frame: depth buffer is NULL");
+
+    const int W = in->geometry->work_width;
+    const int H = in->geometry->work_height;
+    if (W <= 0 || H <= 0) return fail(ctx, "process_frame: bad work size");
+
+    if (timings != nullptr) *timings = stereo_frame_timings{};
+    const PfClock::time_point t_all = PfClock::now();
+
+    // ---- 第 2 步的几何 ----
+    stereo_rectify_output g{};
+    if (stereo_rectify_geometry(in->geometry, &g) != 0) {
+        return fail(ctx, "process_frame: bad geometry");
+    }
+
+    if (!ensure_pf(ctx, W, H)) return fail(ctx, "process_frame: out of memory");
+
+    // 匹配参数：与当前 ctx 相同就跳过 configure（否则每帧都会重分配缓冲区）
+    stereo_config cfg{};
+    if (in->config != nullptr) {
+        cfg = *in->config;
+    } else {
+        stereo_config_default(&cfg);
+    }
+    if (std::memcmp(&cfg, &ctx->cfg, sizeof cfg) != 0) {
+        if (stereo_configure(ctx, &cfg) != 0) return fail(ctx, "process_frame: bad config");
+    }
+
+    // ---- 第 2 步：两路重采样 ----
+    const PfClock::time_point t_rect = PfClock::now();
+
+    // rectify_image 不做格式转换（见 rectify.hpp），所以这里先统一成 BGRA8。
+    // 相机原始帧就是 BGRA8，这条分支只在别的平台喂 RGB/灰度图时才走。
+    const stereo_image *left = in->left;
+    const stereo_image *right = in->right;
+    if (left->format != STEREO_FORMAT_BGRA8 || right->format != STEREO_FORMAT_BGRA8) {
+        if (left->width != right->width || left->height != right->height) {
+            return fail(ctx, "process_frame: left/right size mismatch");
+        }
+        if (!ensure_pf_input(ctx, left->width, left->height)) {
+            return fail(ctx, "process_frame: out of memory");
+        }
+        stereo_image sl = *left;
+        stereo_image sr = *right;
+        sl.data = ctx->pf_in_l.data();
+        sl.stride = left->width * 4;
+        sl.format = STEREO_FORMAT_BGRA8;
+        sr.data = ctx->pf_in_r.data();
+        sr.stride = right->width * 4;
+        sr.format = STEREO_FORMAT_BGRA8;
+        if (!convert_to_bgra8(*left, ctx->pf_in_l.data())) {
+            return fail(ctx, "process_frame: unsupported left format");
+        }
+        if (!convert_to_bgra8(*right, ctx->pf_in_r.data())) {
+            return fail(ctx, "process_frame: unsupported right format");
+        }
+        left = &sl;
+        right = &sr;
+    }
+    stereo_image rl{};
+    rl.data = ctx->pf_rect_l.data();
+    rl.width = W;
+    rl.height = H;
+    rl.stride = W * 4;
+    rl.format = STEREO_FORMAT_BGRA8;
+    stereo_image rr = rl;
+    rr.data = ctx->pf_rect_r.data();
+
+    if (stereo_rectify_image(left, g.to_wide_image, &rl) != 0) {
+        return fail(ctx, "process_frame: rectify left failed");
+    }
+    if (stereo_rectify_image(right, g.to_ultra_image, &rr) != 0) {
+        return fail(ctx, "process_frame: rectify right failed");
+    }
+    if (timings != nullptr) timings->rectify = ms_since(t_rect);
+
+    // ---- 第 3 步：匹配 ----
+    const PfClock::time_point t_match = PfClock::now();
+    if (stereo_match(ctx, &rl, &rr, g.dir, ctx->pf_disp.data(), W) != 0) {
+        return fail(ctx, "process_frame: match failed");
+    }
+    if (timings != nullptr) timings->match = ms_since(t_match);
+
+    // ---- 第 4 步：视差 → 深度（矫正后坐标系）----
+    const PfClock::time_point t_depth = PfClock::now();
+    if (stereo_disparity_to_depth(ctx, ctx->pf_disp.data(), W, W, H, g.focal_baseline, in->min_z,
+                                  in->max_z, ctx->pf_depth_rect.data(), W) != 0) {
+        return fail(ctx, "process_frame: depth failed");
+    }
+    if (timings != nullptr) timings->depth = ms_since(t_depth);
+
+    // ---- 第 4 步收尾：回转成宽相机坐标系 ----
+    const PfClock::time_point t_unrect = PfClock::now();
+    if (stereo_unrectify_depth(ctx->pf_depth_rect.data(), W, W, H, g.to_rect_image, out->depth,
+                               out->depth_stride, W, H) != 0) {
+        return fail(ctx, "process_frame: unrectify failed");
+    }
+    if (timings != nullptr) timings->unrectify = ms_since(t_unrect);
+
+    // ---- 视差输出（可选）----
+    if (out->disp != nullptr) {
+        int ds = out->disp_stride > 0 ? out->disp_stride : W;
+        for (int y = 0; y < H; ++y) {
+            std::memcpy(out->disp + static_cast<size_t>(y) * static_cast<size_t>(ds),
+                        ctx->pf_disp.data() + static_cast<size_t>(y) * W,
+                        static_cast<size_t>(W) * sizeof(float));
+        }
+    }
+
+    // ---- 第 5 步：连通域分析（可选；在**回转后**的深度图上，与 App 的做法一致）----
+    // blobs 与 labels 都不给 = 调用方只要深度，跳过这一步（省掉降采样+连通域的开销）。
+    if (out->blobs != nullptr || out->labels != nullptr) {
+        const PfClock::time_point t_analyze = PfClock::now();
+        stereo_analyze_params ap = in->analysis;
+        ap.fx = g.k.fx;   // 反投影用矫正后的内参（MUp 保持像素尺度，所以这就是对的）
+        ap.fy = g.k.fy;
+        ap.cx = g.k.cx;
+        ap.cy = g.k.cy;
+        if (ap.max_blobs <= 0) ap.max_blobs = 24;
+        if (ap.min_cells <= 0) ap.min_cells = 40;
+
+        // 只要 labels、不要 blobs 时，用 ctx 里的兜底数组承接面块记录
+        stereo_blob *blobs = out->blobs;
+        int capacity = out->blob_capacity;
+        if (blobs == nullptr || capacity <= 0) {
+            if (static_cast<int>(ctx->pf_blobs.size()) < ap.max_blobs) {
+                try {
+                    ctx->pf_blobs.resize(static_cast<size_t>(ap.max_blobs));
+                } catch (const std::bad_alloc &) {
+                    return fail(ctx, "process_frame: out of memory");
+                }
+            }
+            blobs = ctx->pf_blobs.data();
+            capacity = static_cast<int>(ctx->pf_blobs.size());
+        }
+
+        int depth_stride = out->depth_stride > 0 ? out->depth_stride : W;
+        if (stereo_analyze(ctx, out->depth, depth_stride, W, H, &ap, in->center_rect, in->center_q,
+                           blobs, capacity, out->labels, &out->analysis) != 0) {
+            return fail(ctx, "process_frame: analyze failed");
+        }
+        if (timings != nullptr) timings->analyze = ms_since(t_analyze);
+    } else {
+        out->analysis = stereo_analysis{};
+    }
+
+    // ---- 输出几何信息 ----
+    out->k = g.k;
+    out->focal_baseline = g.focal_baseline;
+    out->direction = g.dir;
+
+    if (timings != nullptr) timings->total = ms_since(t_all);
+    ctx->err[0] = '\0';
     return 0;
 }
 
