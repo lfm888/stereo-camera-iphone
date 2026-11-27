@@ -14,6 +14,10 @@ workflows:
           xcodebuild -version
           sw_vers
           xcrun --find metal || echo "no metal compiler"
+      # 临时诊断（任务书第 1.2 步），不阻断构建
+      - name: Diagnose xcodeproj vs project.yml
+        script: |
+          bash scripts/ci_diff_xcodeproj.sh || true
       - name: Build without code signing
         script: |
           set -o pipefail
@@ -34,4 +38,5 @@ workflows:
           ls -lh StereoVision-unsigned.ipa
     artifacts:
       - StereoVision-unsigned.ipa
+      - ci-artifacts/
       - build/Build/Products/Release-iphoneos/StereoVision.app
