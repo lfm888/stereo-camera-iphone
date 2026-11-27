@@ -108,6 +108,33 @@ void to_depth(const float* disp, int disp_stride, int w, int h, float fB, float 
               float* depth, int depth_stride);
 
 // ---------------------------------------------------------------------------
+// 整条匹配：Census ×2 → costVolume → sgmPath×4 → wtaRight → wtaLeft
+// ---------------------------------------------------------------------------
+
+/// 一次完整匹配需要的 scratch（全部由调用方持有，函数内不分配）。
+///
+/// 布局固定：luma/census/disp 是 width*height，cost/sum 是 width*height*D。
+/// 所有权在 C API 的 context（`stereo::MatchBuffers`）或 `stereo::Workspace` 里。
+struct MatchScratch {
+    float* luma_l = nullptr;
+    float* luma_r = nullptr;
+    uint64_t* census_l = nullptr;
+    uint64_t* census_r = nullptr;
+    uint8_t* cost = nullptr;
+    uint16_t* sum = nullptr;
+    float* disp_r = nullptr;
+    float* disp_l = nullptr;
+};
+
+/// 在**已算好亮度**的一对图上跑完整匹配。
+///
+/// 这是 C API `stereo_match` 与 CPU 流水线共用的组合函数：把上面 6 个原语按
+/// Shaders.metal 的顺序串起来，再把结果按 `disp_stride`（像素）拷给调用方。
+/// 输入亮度图的列跨度恒为 `p.W`（紧凑）。
+void match_luma(const float* luma_l, const float* luma_r, const SgmParams& p,
+                const MatchScratch& scratch, float* disp, int disp_stride);
+
+// ---------------------------------------------------------------------------
 // 小工具
 // ---------------------------------------------------------------------------
 

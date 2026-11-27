@@ -71,4 +71,14 @@ float param_default(int id) {
     return d == nullptr ? 0.0f : d->default_value;
 }
 
+void config_default(stereo_config& cfg) {
+    // 默认值来自参数描述表，不在这里各写一份
+    cfg.max_disp = static_cast<int>(param_default(STEREO_PARAM_MAX_DISP));
+    cfg.p1 = static_cast<int>(param_default(STEREO_PARAM_P1));
+    cfg.p2 = static_cast<int>(param_default(STEREO_PARAM_P2));
+    cfg.uniqueness = param_default(STEREO_PARAM_UNIQUENESS);
+    cfg.lr_check = static_cast<int>(param_default(STEREO_PARAM_LR_CHECK));
+    cfg.threads = 0;
+}
+
 }  // namespace stereo

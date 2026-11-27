@@ -18,8 +18,10 @@ iPhone 后置双摄（广角 + 超广角）做实时立体匹配，测出每个�
 core/                              ① C++ 核心（跨平台，零 Apple 依赖）
   include/stereo/sgm.hpp             算法函数声明（8 个，零件级，只给 C++ 看）
   src/sgm.cpp                        算法本体：census / costVolume / sgmPath / wta / toDepth
-  include/stereo/stereo_c_api.h      纯 C 接口（.a 的公开符号表，总成级）
-  src/stereo_c_api.cpp               C 门面：句柄、缓冲区复用、像素格式、错误码
+  include/stereo/stereo_c_api.h      纯 C 接口**总头**（只 include 9 个领域子头）
+  include/stereo/stereo_*.h          按领域拆的自包含 C 头（types/context/match/…）
+  src/capi/*.cpp                     C 门面：校验、POD 换乘、错误码（按领域分文件，无像素循环）
+  src/{pipeline,color,workspace}.cpp 组合调用 / 取决于像素格式的搬运 / 跨帧缓冲
   tests/golden_main.cpp              与 numpy 孪生实现的逐位对拍
   tests/c_api_smoke.c                用纯 C 编译器验证 C 接口
   tests/golden/*.npy                 金标准向量（tiny，0.28 MB）
@@ -92,7 +94,7 @@ iOS App target       ──▶ 直接编译 core/src（没有独立的 StereoCor
 
 # 一、为什么这样分层
 
-## Q1. `stereo_c_api.h` 和 `stereo_c_api.cpp` 各自负责什么？
+## Q1. 公开 C 头与 C 门面各自负责什么？
 
 **`stereo_c_api.h`：对外暴露的纯 C 接口契约。** 只有 C 结构体、枚举、不透明句柄声明和
 `extern "C"` 函数声明，不含任何 C++ 语法与 C++ 头文件依赖，所以 C、Objective-C++（`.mm`）、
@@ -104,7 +106,7 @@ Swift 都能直接接入。
 `core/CMakeLists.txt` 的源文件列表；跨平台能力面与 iOS 使用面的差别见
 `ARCHITECTURE.md` §2。
 
-## Q2. `stereo_c_api.cpp` 是不是把算法又实现了一遍？
+## Q2. C 门面是不是把算法又实现了一遍？
 
 **不是。** 两份头描述的是**粒度不同**的两组函数：
 
@@ -154,7 +156,7 @@ void stereo_destroy(stereo_context *ctx);
 1. 头文件里不出现 `std::vector` 等 C++ 类型，纯 C 编译器能读；
 2. 以后往 context 里加字段、换缓冲区策略，**调用方一行都不用改**（不需要重编）。
 
-## Q5. 为什么 `stereo_c_api.cpp` 里用 `stereo::` 显式限定，而不是 `using namespace stereo;`？
+## Q5. 为什么门面里用 `stereo::` 显式限定，而不是 `using namespace stereo;`？
 
 `sgm.hpp` 的算子都在 `namespace stereo` 下。显式写 `stereo::SgmParams`、`stereo::census(...)`
 可以：
@@ -246,10 +248,10 @@ libstereo_core.a  =  core/src 的算法目标文件（按领域分文件）
 | 改动 | 影响 |
 |---|---|
 | 改 `sgm.cpp` / `sgm.hpp` | 只影响 C++ 核心与测试；上层 `.mm` 不需要改（它只看 C 接口） |
-| 改 `stereo_c_api.h` / `.cpp` | 影响所有包含它的编译单元：`Bridge/*.mm`、`c_api_smoke.c`、`golden_test`，需重编并检查调用方接口 |
+| 改公开 C 头（`stereo_*.h`）或 `src/capi/*.cpp` | 影响所有包含它的编译单元：`Bridge/*.mm`、`c_api_smoke.c`、`golden_test`、头自包含检查，需重编并更新 `core/tests/api_surface.txt` 基线 |
 | 改 `CMakeLists.txt` | 只影响桌面构建；iOS 侧是 App target 直接编同一批源码（见 Q10） |
 
-**上层接入时通常只需要 `stereo_c_api.h` + `.a`**；`sgm.hpp` 只在编译 C++ 核心和测试时用到。
+**上层接入时通常只需要总头 `stereo_c_api.h`（或某个领域子头）+ `.a`**；`*.hpp` 只在编译 C++ 核心和测试时用到。
 
 ## Q10. iOS 上 `core/` 是独立的 `StereoCore` target 吗？
 
@@ -318,7 +320,7 @@ xcodegen generate && open StereoVision.xcodeproj
 
 模型权重占解压后体积的 **73%**，float 权重又压不太动，所以 zip 里少了约 4.3 MB。
 可执行文件只小了 10 KB：删了 Detector + Vision/CoreML 链接，加进了 `sgm.cpp` +
-`stereo_c_api.cpp` 的标量代码，基本互相抵消。算法代码比模型小两个数量级。
+C 门面的标量代码，基本互相抵消。算法代码比模型小两个数量级。
 
 ## Q13. 现在 GPU 用在哪？怎么确认？
 

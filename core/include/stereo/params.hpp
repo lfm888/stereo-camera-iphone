@@ -9,7 +9,8 @@
 
 #pragma once
 
-#include "stereo/stereo_c_api.h"
+#include "stereo/stereo_context.h"   // stereo_config
+#include "stereo/stereo_params.h"    // stereo_param_desc
 
 namespace stereo {
 
@@ -24,5 +25,9 @@ float param_default(int id);
 
 /// 按 id 取描述；id 非法返回 nullptr。
 const stereo_param_desc* param_desc(int id);
+
+/// 把 cfg 填成默认值（`stereo_config_default` 的实现）。
+/// 放在这里而不是 C 门面里：C++ 的 process_frame 也要用同一份默认值。
+void config_default(stereo_config& cfg);
 
 }  // namespace stereo

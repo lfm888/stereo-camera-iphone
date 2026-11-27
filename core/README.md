@@ -14,8 +14,8 @@
         │   sgm.hpp  ──▶  sgm.cpp              算法本体（C++）                      │
         │   ↑ 只有 C++ 能读                    零平台依赖、零缓冲区管理            │
         │                                                                          │
-        │   stereo_c_api.h ──▶ stereo_c_api.cpp    C 门面（C++ 写的、导出 C 符号）  │
-        │   ↑ C 编译器也能读                    参数校验 + 缓冲区复用 + 结构体翻译    │
+        │   stereo_*.h ──▶ src/capi/*.cpp          C 门面（C++ 写的、导出 C 符号）  │
+        │   ↑ C 编译器也能读                    参数校验 + 结构体翻译 + 错误码        │
         └──────────────────────────────────────────────────────────────────────────┘
                  ▲                                        ▲
         core/CMakeLists.txt 产出的 .a            StereoVision/Bridge/StereoCoreBridge.mm
@@ -30,8 +30,10 @@
 | `src/geometry.cpp` | C++ | 由内参+外参解极线矫正（基线对齐旋转 + 单应） | 不碰像素 |
 | `include/stereo/rectify.hpp` | C++ | 第 2 步的重采样 + 第 4 步的深度回转（`rectify_image` / `unrectify_depth`） | 不是对外接口 |
 | `src/rectify.cpp` | C++ | `rectify` / `unrectifyDepth` 两个 Metal kernel 的 CPU 孪生 | — |
-| `include/stereo/stereo_c_api.h` | **C** | `.a` 的**公开符号表**：POD 结构体 + 不透明句柄 `stereo_context*` | 不是算法头 |
-| `src/stereo_c_api.cpp` | C++ | 上面那批 `stereo_*` 符号的**实现**：`new` 出 context、按尺寸复用缓冲区、`try/catch` 挡 `bad_alloc` | 不是算法；它一行信号处理都没有 |
+| `include/stereo/stereo_c_api.h` | **C** | `.a` 的**公开符号总头**：只 include 9 个领域子头（types/context/match/rectify/analyze/export/calibrate/params/pipeline） | 不是算法头 |
+| `include/stereo/stereo_*.h` | **C** | 按领域拆的自包含子头；每个都能被纯 C 编译器单独包含（CMake 的 `stereo_header_selfcheck` 保证） | 不互相依赖成环 |
+| `src/capi/*.cpp` | C++ | 上面那批 `stereo_*` 符号的**实现**：参数校验、POD ↔ C++ 换乘、把失败转成错误码；`capi_internal.hpp` 是 `struct stereo_context` 的唯一定义 | 不是算法；门面里没有像素循环 |
+| `src/{pipeline,color,workspace}.cpp` | C++ | 门面与 C++ 调用者共用的行为：`process_frame` 组合、像素格式搬运、跨帧缓冲 | 不是新的算法 |
 
 **为什么不能直接把 `sgm.hpp` 给 C 用**：
 
@@ -42,8 +44,9 @@
 | `#include <cstdint>` | C 里叫 `<stdint.h>` |
 
 所以同一批函数必须有一份 C 版声明 —— 那就是 `stereo_c_api.h`。
-两份头描述的是**同一个 `.a`**：`sgm.cpp` 出 C++ 符号，`stereo_c_api.cpp` 出未修饰的
+两份头描述的是**同一个 `.a`**：`src/` 的算法文件出 C++ 符号，`src/capi/*.cpp` 出未修饰的
 C 符号（`stereo_create` / `stereo_match` / …），`nm` / `dumpbin` 能直接看到。
+符号面由 `tools/check_api_surface.py` 对比 `core/tests/api_surface.txt` 锁定。
 
 **为什么 `stereo_c_api.*` 放在 `core/` 而不是 `Bridge/`**：它是 `.a` 的导出符号，属于
 **库的一部分**。放这儿，Windows exe / Linux / Python ctypes 都能直接调；放到 `Bridge/`

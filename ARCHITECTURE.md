@@ -33,37 +33,41 @@ Shaders.metal                 GPU kernel（iOS 的快路径）
 
 ## 1. `core/` — C++ 算法
 
-### 1.1 对外契约：`include/stereo/stereo_c_api.h`（478 行，版本 150）
+### 1.1 对外契约：`include/stereo/stereo_c_api.h`（总头）+ 9 个领域子头（版本 150）
 
-**24 个导出符号**（`stereo_*`）+ POD 结构体。分六组：
+**24 个导出符号**（`stereo_*`）+ POD 结构体。按领域拆在 9 个**自包含**子头里，
+总头只 `#include` 它们（旧的 include 路径不变）。每个子头有自己的 `extern "C"` 与
+include guard；CMake 为每个头生成一个只 include 它的 `.c`（`stereo_header_selfcheck`），
+漏一个依赖就编不过。符号面另由 `tools/check_api_surface.py` + `core/tests/api_surface.txt` 锁定。
 
-| 组 | 函数 | 干什么 |
-|---|---|---|
-| 生命周期 | `stereo_create` / `stereo_destroy` / `stereo_config_default` / `stereo_configure` / `stereo_last_error` | context + 参数；内部缓冲按尺寸复用 |
-| 第 2 步 极线矫正 | `stereo_rectify_geometry` | 内参+外参 → MW/MU/MUp/K/Pl/Pr/Q |
-| | `stereo_rectify_image` / `stereo_unrectify_depth` | 单应重采样 / 深度回转（Metal kernel 的 CPU 孪生） |
-| 第 3 步 匹配 | `stereo_match` | Census 7×7 + costVolume + SGM 4 路径 + 唯一性 + LR 检查 + 亚像素 |
-| 第 4 步 深度 | `stereo_disparity_to_depth` | 视差 → 深度（3×3 中值 + 范围截断） |
-| 第 5 步 后处理 | `stereo_analyze` / `stereo_analyze_grid` | 深度连通域 → 面块 + 标签图 + 准星读数 |
-| | `stereo_sample_depth` | 归一化矩形内的第 q 分位数 |
-| 导出 | `stereo_point_cloud` / `stereo_point_cloud_capacity` / `stereo_depth_filter` / `stereo_depth_to_u16_mm` / `stereo_copy_depth` | PLY 点云、深度裁剪、16 位毫米打包、跨度拷贝 |
-| 自动标定 | `stereo_calibrate`（CPU 全流水线）/ `stereo_calibrate_search`（平台提供打分回调） | 在 flip×dy 上搜索行对齐最好的参数 |
-| 全流水线 | `stereo_process_frame` | **第 2..5 步一条龙**，给非 Apple 前端；iOS 不走它（原因见 FAQ Q18） |
-| 参数表 | `stereo_param_count` / `stereo_param_table` / `stereo_param_find` | 名称/分组/范围/步长/默认值/单位/枚举（**唯一真源**，见 §1.3） |
+| 子头 | 内容 |
+|---|---|
+| `stereo_types.h` | 版本宏、`stereo_format`、`stereo_image`、`stereo_intrinsics` |
+| `stereo_context.h` | 不透明句柄、`stereo_config`、生命周期、`stereo_last_error` |
+| `stereo_match.h` | `stereo_match`（Census + SGM 4 路径）、`stereo_disparity_to_depth` |
+| `stereo_rectify.h` | `stereo_rectify_geometry` / `_image` / `stereo_unrectify_depth` |
+| `stereo_analyze.h` | `stereo_analyze_grid` / `stereo_sample_depth` / `stereo_analyze` |
+| `stereo_export.h` | `stereo_point_cloud(_capacity)` / `_depth_filter` / `_depth_to_u16_mm` / `_copy_depth` |
+| `stereo_calibrate.h` | `stereo_calibrate`（CPU 打分）/ `stereo_calibrate_search`（平台回调） |
+| `stereo_params.h` | `stereo_param_count` / `_table` / `_find`（参数表唯一真源，见 §1.3） |
+| `stereo_pipeline.h` | `stereo_process_frame`（第 2..5 步；iOS 不走它，见 FAQ Q18） |
 
 ### 1.2 实现
 
 | 文件 | 行 | 职责 | 主要入口 |
 |---|---|---|---|
-| `src/sgm.cpp` | 268 | 第 3/4 步本体（逐 kernel 对齐 MSL） | `rgb_to_luma` `census` `cost_volume` `sgm_all_paths` `wta_right` `wta_left` `to_depth` |
+| `src/sgm.cpp` | 289 | 第 3/4 步原语（逐 kernel 对齐 MSL）+ `match_luma` 组合 | `census` `cost_volume` `sgm_all_paths` `wta_right` `wta_left` `to_depth` `match_luma` |
 | `src/geometry.cpp` | 213 | 3×3 小工具 + 极线矫正几何 | `rectify_geometry` |
 | `src/rectify.cpp` | 142 | 重采样（4 次超采样 + 双线性）/ 深度回转（最近邻） | `rectify_image` `unrectify_depth` |
+| `src/color.cpp` | 110 | 像素格式 → 亮度 / 紧凑 BGRA8（从边界层搬来） | `to_luma` `to_bgra8` |
 | `src/analyze.cpp` | 207 | 降采样成网格 → 4 邻域连通域 → 面块统计 | `analyze_depth` |
+| `src/sample.cpp` | 58 | 自适应抽样 + 第 q 分位数 | `sample_quantile` |
 | `src/cloud.cpp` | 187 | PLY（`std::to_chars`）、深度裁剪/打包/拷贝 | `point_cloud_ply` 等 |
 | `src/calibrate.cpp` | 222 | 自动标定搜索；CPU 打分版也在里面 | `calibrate_search` `calibrate_rectification` |
-| `src/sample.cpp` | 58 | 自适应抽样 + 第 q 分位数 | `sample_quantile` |
-| `src/params.cpp` | 74 | **参数描述表**（11 条），`stereo_config_default` 的默认值也来自它 | `param_table` `param_default` |
-| `src/stereo_c_api.cpp` | 903 | 参数校验 + 缓冲管理 + POD 翻译 + `process_frame` 的组合调用（**不含算法**） | 24 个导出符号 |
+| `src/params.cpp` | 84 | **参数描述表**（11 条）+ `config_default`（C/C++ 共用） | `param_table` `param_default` `config_default` |
+| `src/workspace.cpp` | 174 | 跨帧缓冲（match / analyze / calibrate / frame），尺寸不变不重分配 | `MatchBuffers` `AnalyzeBuffers` `CalibrateBuffers` `FrameBuffers` |
+| `src/pipeline.cpp` | 217 | 第 2..5 步组合（C 与 C++ 前端共用） | `stereo::process_frame` |
+| `src/capi/*.cpp` | 496（8 个文件，最大 102） | 边界层：校验 + POD 换乘 + 错误码，**无像素循环**；`capi_internal.hpp` 是 `struct stereo_context` 的唯一定义 | 24 个导出符号 |
 
 ### 1.3 参数表（`params.cpp`）
 

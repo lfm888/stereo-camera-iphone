@@ -23,7 +23,21 @@ add_library(stereo_core STATIC
     src/cloud.cpp
     src/calibrate.cpp
     src/params.cpp
-    src/stereo_c_api.cpp
+    # 边界层的格式搬运（逐像素，所以属于算法层，不属于 capi）
+    src/color.cpp
+    # 跨帧缓冲的所有者（C API 与 CPU 流水线共用）
+    src/workspace.cpp
+    # 第 2..5 步的组合（C 门面只做翻译）
+    src/pipeline.cpp
+    # C 门面：按领域拆分，只做校验 / 换乘 / 错误码
+    src/capi/context.cpp
+    src/capi/match.cpp
+    src/capi/rectify.cpp
+    src/capi/analyze.cpp
+    src/capi/export.cpp
+    src/capi/calibrate.cpp
+    src/capi/params.cpp
+    src/capi/pipeline.cpp
 )
 target_include_directories(stereo_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 

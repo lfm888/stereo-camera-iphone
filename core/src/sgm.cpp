@@ -265,4 +265,25 @@ void to_depth(const float* disp, int disp_stride, int w, int h, float fB, float 
     }
 }
 
+void match_luma(const float* luma_l, const float* luma_r, const SgmParams& p,
+                const MatchScratch& sc, float* disp, int disp_stride) {
+    census(luma_l, p.W, p.H, sc.census_l);
+    census(luma_r, p.W, p.H, sc.census_r);
+    cost_volume(sc.census_l, sc.census_r, p, sc.cost);
+    sgm_all_paths(sc.cost, sc.sum, luma_l, p);
+
+    // wta_right 的结果是 wta_left 的输入（左右一致性检查），两张图不能是同一块缓冲区。
+    wta_right(sc.sum, p, sc.disp_r);
+    wta_left(sc.sum, sc.disp_r, p, sc.disp_l);
+
+    // 输出到调用方的缓冲区（可能带行跨度）。逐行 memcpy，不做逐像素运算。
+    const int W = p.W, H = p.H;
+    if (disp_stride <= 0) disp_stride = W;
+    for (int y = 0; y < H; ++y) {
+        std::memcpy(disp + static_cast<size_t>(y) * static_cast<size_t>(disp_stride),
+                    sc.disp_l + static_cast<size_t>(y) * static_cast<size_t>(W),
+                    static_cast<size_t>(W) * sizeof(float));
+    }
+}
+
 }  // namespace stereo
