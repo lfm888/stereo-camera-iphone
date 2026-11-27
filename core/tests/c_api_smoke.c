@@ -215,6 +215,10 @@ int main(void) {
         for (int i = 0; i < W * H; ++i) if (fdepth[i] > 0.0f) ++dvalid;
         snprintf(buf, sizeof(buf), "深度有效 %d/%d，网格 %dx%d", dvalid, W * H,
                  fout.analysis.grid_width, fout.analysis.grid_height);
+        if (prc != 0) {
+            /* 失败时把阶段名打出来（fail() 的文案会指明是哪一步） */
+            snprintf(buf, sizeof(buf), "rc=%d: %s", prc, stereo_last_error(ctx));
+        }
         check("stereo_process_frame 成功", prc == 0, buf);
         check("stereo_process_frame 有有效深度", dvalid > 0, "");
         check("stereo_process_frame 拒绝 NULL", stereo_process_frame(ctx, NULL, &fout, NULL) != 0, "");
