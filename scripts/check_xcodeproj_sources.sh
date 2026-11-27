@@ -1,25 +1,33 @@
 #!/bin/bash
-# check_xcodeproj_sources.sh —— 确认"磁盘上的源文件"和"工程里参与编译的文件"一致
+# check_xcodeproj_sources.sh —— 确认"仓库里的源文件"和"工程里参与编译的文件"一致
 #
-# 为什么需要它：CI 已经不依赖提交的 pbxproj，而是每次从 project.yml 生成。但生成器
-# 只认 project.yml 里 sources 声明的目录。如果有人把 .swift 放进一个没被 sources 覆盖的
-# 目录（或者在 project.yml 里写错路径），xcodebuild 会**成功**——只是那个文件根本没参与编译。
-# 这个脚本让这种"静默漏文件"当场变成 CI 失败。
+# 为什么需要它：CI 不再依赖提交的 pbxproj，每次从 project.yml 生成。生成器只认
+# project.yml 里 sources 声明的目录。一旦有源文件没被覆盖，xcodebuild 会**成功**——
+# 只是那个文件根本没参与编译。这个脚本让"静默漏文件"当场变成 CI 失败。
 #
 # 用法（CI 里、xcodegen generate 之后、xcodebuild 之前）：
 #   bash scripts/check_xcodeproj_sources.sh
 #
-# 判据：
-#   磁盘 = project.yml sources 覆盖的目录下所有 *.swift/*.mm/*.m/*.metal/*.cpp/*.c
-#   工程 = 生成工程里所有 target 的 Sources build phase
-#   两者必须逐项相同（按仓库相对路径）。
+# 判据（两个方向都要成立）：
+#   仓库 —— 除"豁免目录"外的所有 *.swift/*.mm/*.m/*.cpp/*.c/*.metal
+#   工程 —— 生成工程里所有 target 的 Sources build phase
+#   两者必须逐项相同。文件出现在未声明的目录里（例如新建了一个顶层目录）也会失败。
 #
-# 注意：比较用 File.realpath —— macOS 上 /tmp 是指向 /private/tmp 的软链，
-# 只做字符串前缀裁剪会得出假的"全部不一致"。
+# 注意两件事：
+#   1. 比较用 File.realpath —— macOS 上 /tmp 是指向 /private/tmp 的软链，
+#      只做字符串前缀裁剪会得出假的"全部不一致"。
+#   2. 两个清单都必须按**字节序**排序 —— Ruby 的 String#sort 是字节序，而 macOS 的
+#      sort 在 en_US.UTF-8 下大小写不敏感（"core/" 会排到 "StereoVision/" 前面），
+#      混用会得出"内容相同但顺序不同"的假失败。
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 PROJECT="${PROJECT:-StereoVision.xcodeproj}"
+
+# 参与 iOS 编译的目录（必须与 project.yml 的 sources 对应）
+COMPILED_DIRS="StereoVision core/src"
+# 明确不参与 iOS 编译的目录（脚本、工具、C++ 测试、构建产物、CI 配置）
+EXEMPT_DIRS="core/tests scripts tools docs build .github Config"
 
 if [ ! -d "$PROJECT" ]; then
     echo "找不到 $PROJECT —— 先运行 xcodegen generate --spec project.yml"
@@ -30,12 +38,29 @@ DISK="$(mktemp)"
 PROJ="$(mktemp)"
 trap 'rm -f "$DISK" "$PROJ"' EXIT
 
-# 1) 磁盘上"应该"参与编译的文件。
-#    目录清单与 project.yml 的 sources 一一对应；core/tests 不在 sources 里，天然被排除。
+echo "编译目录: $COMPILED_DIRS"
+echo "豁免目录: $EXEMPT_DIRS"
+
+# 0) 声明的编译目录必须真的在 project.yml 的 sources 里
+for d in $COMPILED_DIRS; do
+    if ! grep -q "path: *$d\$" project.yml; then
+        echo "FAIL: project.yml 的 sources 里没有声明 $d"
+        exit 1
+    fi
+done
+
+# 1) 仓库里所有"应该参与编译"的源文件
 {
-    find StereoVision -type f \( -name '*.swift' -o -name '*.mm' -o -name '*.m' -o -name '*.metal' \)
-    find core/src -type f \( -name '*.cpp' -o -name '*.c' \)
-} | sed 's#^\./##' | LC_ALL=C sort -u > "$DISK"
+    find . -type f \( -name '*.swift' -o -name '*.mm' -o -name '*.m' \
+                      -o -name '*.cpp' -o -name '*.c' -o -name '*.metal' \) \
+        -not -path './.git/*'
+} | sed 's#^\./##' | while IFS= read -r f; do
+    keep=1
+    for d in $EXEMPT_DIRS; do
+        case "$f" in "$d"/*) keep=0 ;; esac
+    done
+    [ "$keep" = 1 ] && printf '%s\n' "$f"
+done | LC_ALL=C sort -u > "$DISK"
 
 # 2) 生成工程里实际参与编译的文件（所有 target）
 ruby - "$PROJECT" > "$PROJ" <<'RUBY'
@@ -55,14 +80,13 @@ proj.targets.each do |t|
         names << (path.start_with?("#{root}/") ? path[(root.length + 1)..] : path)
     end
 end
-puts names.uniq.sort
+names = names.uniq.sort
+# 只报告仓库内的文件（指向 SDK / 系统头的一律忽略）
+puts names.select { |n| !n.start_with?("/") }
 RUBY
-
-# 两个清单都必须按**字节序**排：Ruby 的 String#sort 是字节序，而 macOS 的 sort
-# 在 en_US.UTF-8 下是大小写不敏感排序（"core" 会排到 "StereoVision" 前面），
-# 混用会得出"内容相同但顺序不同"的假失败。
 LC_ALL=C sort -u -o "$PROJ" "$PROJ"
-echo "== 磁盘上 $(wc -l < "$DISK" | tr -d ' ') 个源文件 / 工程里 $(wc -l < "$PROJ" | tr -d ' ') 个 =="
+
+echo "== 仓库 $(wc -l < "$DISK" | tr -d ' ') 个源文件 / 工程里 $(wc -l < "$PROJ" | tr -d ' ') 个 =="
 
 if diff -u "$DISK" "$PROJ"; then
     echo "OK: 工程覆盖了所有源文件"
@@ -70,7 +94,8 @@ if diff -u "$DISK" "$PROJ"; then
 fi
 
 echo
-echo "FAIL: 工程与磁盘不一致（'-' 只在磁盘上，'+' 只在工程里）"
-echo "  '-' 说明文件没进工程：检查 project.yml 的 sources 是否覆盖了它所在目录"
-echo "  '+' 说明工程引用了不存在的文件：多半是 project.yml 里的路径写错了"
+echo "FAIL: 仓库与工程不一致（'-' 只在仓库里，'+' 只在工程里）"
+echo "  '-' 说明文件没参与编译：要么它在未声明的目录里（把目录加进 project.yml 的 sources"
+echo "      并同步更新本脚本的 COMPILED_DIRS），要么 project.yml 里的路径写错了"
+echo "  '+' 说明工程引用了仓库里不存在的文件：多半是 project.yml 里的路径写错了"
 exit 1
