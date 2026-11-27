@@ -29,6 +29,14 @@ import os
 import re
 import sys
 
+# Windows 的默认控制台编码是 cp1252/cp936，打印中文会 UnicodeEncodeError。
+# 强制 UTF-8（GitHub runner 与本地终端都能显示）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except (AttributeError, ValueError):
+        pass
+
 DEFAULT_INCLUDE = "core/include/stereo"
 DEFAULT_BASELINE = "core/tests/api_surface.txt"
 

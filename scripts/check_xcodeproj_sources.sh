@@ -59,7 +59,9 @@ done
     for d in $EXEMPT_DIRS; do
         case "$f" in "$d"/*) keep=0 ;; esac
     done
-    [ "$keep" = 1 ] && printf '%s\n' "$f"
+    # 用 if 而不是 `[ ... ] && printf`：keep=0 时后者返回 1，
+    # 配合 set -o pipefail 会让整个管道失败（find 的顺序一换就踩到）。
+    if [ "$keep" = 1 ]; then printf '%s\n' "$f"; fi
 done | LC_ALL=C sort -u > "$DISK"
 
 # 2) 生成工程里实际参与编译的文件（所有 target）
