@@ -25,8 +25,8 @@ struct RootView: View {
 
     /// 单元测试宿主启动时**不要**创建引擎。
     ///
-    /// `StereoVisionTests` 是桥接契约测试，只需要 `SVStereoCore`；而 `AppModel.init`
-    /// 会建 `StereoEngine` → `DepthTarget`（共享 MTLBuffer 上的线性纹理）。
+    /// `StereoVisionTests` 是桥接契约测试，只用到 ObjC 桥接层；而 `AppModel.init`
+    /// 会建 Metal 引擎 → 深度目标（共享 MTLBuffer 上的线性纹理）。
     /// 模拟器的 Metal 不允许这种组合（真机允许），宿主 App 会启动即崩，测试永远跑不到。
     /// 这不是产品路径：只有 XCTest 注入的 `XCTestConfigurationFilePath` 存在时才跳过。
     private static func makeModel() -> AppModel? {
