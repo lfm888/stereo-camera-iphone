@@ -53,3 +53,48 @@ targets:
         INFOPLIST_KEY_UIStatusBarHidden: YES
         INFOPLIST_KEY_UIRequiresFullScreen: YES
         MTL_FAST_MATH: YES
+
+  # ---------------------------------------------------------------------------
+  # iOS 侧唯一的自动化测试：只测**桥接契约**（不测算法，不跑相机）。
+  #
+  #   1) 跨语言 ABI：core/tests/golden 的 tiny 向量经 SVStereoCore 跑一遍，
+  #      与 C++ golden 的 disp_f32 逐位一致；
+  #   2) 参数表自洽（UI 控件与默认值都来自它）；
+  #   3) 无状态函数（sampleDepth）不需要 context。
+  #
+  # 夹具直接引用 core/tests/golden 里的 .npy（不复制、不改 C++ 测试的仓库布局）。
+  # ---------------------------------------------------------------------------
+  StereoVisionTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: StereoVisionTests
+      - path: core/tests/golden/left_u8.npy
+        buildPhase: resources
+      - path: core/tests/golden/right_u8.npy
+        buildPhase: resources
+      - path: core/tests/golden/disp_f32.npy
+        buildPhase: resources
+    dependencies:
+      - target: StereoVision
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
+        # 单元测试宿主：测试 bundle 要注入 App 进程，才能看见 Bridging Header 导入的类型
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/StereoVision.app/StereoVision"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+# 显式 scheme：原来由 Xcode 自动生成；加了 test target 之后需要声明它属于哪个 scheme，
+# CI 才能用 `xcodebuild test -scheme StereoVision` 跑模拟器测试。
+schemes:
+  StereoVision:
+    build:
+      targets:
+        StereoVision: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - StereoVisionTests

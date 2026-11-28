@@ -14,7 +14,7 @@
 
 import Metal
 
-final class MetalBlockMatcher: MatchingBackend {
+final class MetalBlockMatcher: MetalMatchingStage {
     private let pipelines: MetalPipelines
     private let dispatch: MetalDispatch
 

@@ -13,7 +13,7 @@
 
 import Metal
 
-final class MetalSGMMatcher: MatchingBackend {
+final class MetalSGMMatcher: MetalMatchingStage {
     private let pipelines: MetalPipelines
     private let dispatch: MetalDispatch
     private let costBuffer, sumBuffer: MTLBuffer

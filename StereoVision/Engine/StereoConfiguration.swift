@@ -10,7 +10,7 @@
 //    .cppHybrid  rectification=Metal, readback=CPU, matching=C++, depth=C++
 //    系统深度    走 SystemDepthProcessor，不经过几何/匹配/视差转深度，所以不在这里
 //
-//  未来接 ONNX 时只增加一个 MatchingBackend 实现 + 一个配置项，
+//  未来接 ONNX 时只增加一个 MetalMatchingStage 实现 + 一个配置项，
 //  不要再写一条 `stereoONNX(...)` 全流程函数。
 //
 

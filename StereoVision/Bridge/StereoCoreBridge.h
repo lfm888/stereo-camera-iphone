@@ -24,8 +24,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 /// 分析结果容器（定义在本文件后面）。这里先前置声明，因为 SVStereoCore 的方法要用它。
 @class SVAnalysis;
-@class SVFrameRequest;
-@class SVFrameTimings;
 @class SVCalibration;
 
 /// 像素字节顺序，与 core/include/stereo/stereo_c_api.h 的 enum stereo_format 一一对应。
@@ -141,28 +139,6 @@ typedef NS_ENUM(NSInteger, SVImageFormat) {
              dstStride:(NSInteger)dstStride
                dstWidth:(NSInteger)dstWidth
               dstHeight:(NSInteger)dstHeight;
-
-/// 第 2..5 步的 CPU 全流水线（对应 core 的 `stereo_process_frame`）。
-///
-/// Swift 的 iOS 路径**不用**它：那条是"GPU 矫正 + C++ 匹配/深度"，因为矫正后的
-/// 一对纹理还要给 Rectified pair / Anaglyph 视图用。这个方法是给非 Apple 前端
-/// （Windows/Linux/Qt）和将来可能的"全 CPU"后端准备的。
-///
-/// - left/right：**原始未矫正**图（任意 `SVImageFormat`），内部会转成 BGRA8。
-/// - disparity 可为 NULL（不要视差）；depth 必填；analysis 内部的缓冲会按需扩容。
-- (BOOL)processFrame:(const uint8_t *)left
-          leftStride:(NSInteger)leftStride
-          leftFormat:(SVImageFormat)leftFormat
-               right:(const uint8_t *)right
-         rightStride:(NSInteger)rightStride
-         rightFormat:(SVImageFormat)rightFormat
-             request:(SVFrameRequest *)request
-           disparity:(nullable float *)disparity
-          dispStride:(NSInteger)dispStride
-               depth:(float *)depth
-         depthStride:(NSInteger)depthStride
-            analysis:(SVAnalysis *)analysis
-             timings:(nullable SVFrameTimings *)timings;
 
 // ---------------------------------------------------------------------------
 // 深度图查询与分析（准星读数 / 点选测距 / 3D segmentation）
@@ -398,48 +374,6 @@ typedef NS_ENUM(NSInteger, SVParamKind) {
 
 /// 按 key 查；找不到返回 nil。
 + (nullable SVParameter *)lookup:(NSString *)key;
-
-@end
-
-// ---------------------------------------------------------------------------
-// stereo_process_frame 的输入/输出
-// ---------------------------------------------------------------------------
-
-/// 全流水线的标量输入。图像与输出缓冲走 `processFrame:` 的参数。
-@interface SVFrameRequest : NSObject
-
-/// 第 2 步的几何（内参/外参/工作分辨率/flip/dy）。
-@property (nonatomic, strong) SVRectifyInput *geometry;
-
-@property (nonatomic) NSInteger maxDisparity;
-@property (nonatomic) NSInteger p1;
-@property (nonatomic) NSInteger p2;
-@property (nonatomic) float uniqueness;
-@property (nonatomic) BOOL lrCheck;
-
-@property (nonatomic) float minZ;
-@property (nonatomic) float maxZ;
-
-/// 准星矩形（归一化 x0,y0,x1,y1）+ 分位数。`computeCenter = NO` 时不计算。
-@property (nonatomic) simd_float4 centerRect;
-@property (nonatomic) float centerQ;
-@property (nonatomic) BOOL computeCenter;
-
-/// 连通域分析参数（0 = 用 C++ 的默认值 24 / 40）。
-@property (nonatomic) NSInteger maxBlobs;
-@property (nonatomic) NSInteger minCells;
-
-@end
-
-/// 各阶段耗时（毫秒），诊断用。
-@interface SVFrameTimings : NSObject
-
-@property (nonatomic, readonly) double rectify;
-@property (nonatomic, readonly) double match;
-@property (nonatomic, readonly) double depth;
-@property (nonatomic, readonly) double unrectify;
-@property (nonatomic, readonly) double analyze;
-@property (nonatomic, readonly) double total;
 
 @end
 

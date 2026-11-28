@@ -12,7 +12,7 @@
 
 import Metal
 
-final class MetalDepthProcessor: MetalDepthBackend {
+final class MetalDepthProcessor: MetalDepthStage {
     private let pipelines: MetalPipelines
     private let dispatch: MetalDispatch
 

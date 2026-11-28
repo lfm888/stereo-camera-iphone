@@ -15,16 +15,16 @@ StereoVision/Engine/
 ├── Input/FrameInputProvider.swift        CMSampleBuffer → 纹理 + 内参 + CameraRig
 ├── Geometry/StereoGeometrySolver.swift   SVRectification.solve（core/src/geometry.cpp）
 ├── Rectification/
-│   ├── RectificationBackend.swift        协议（编码进调用方的 encoder）
+│   ├── MetalRectificationStage.swift     协议（编码进调用方的 encoder；只有 Metal 实现）
 │   └── MetalRectifier.swift              rectify kernel
 ├── Matching/
-│   ├── MatchingBackend.swift             协议 + MetalMatchInput
+│   ├── MetalMatchingStage.swift          协议 + MetalMatchInput（C++ 匹配不实现它）
 │   ├── MetalSGMMatcher.swift             costVolume / sgmPath×4 / wta（含自己的缓冲）
 │   ├── MetalBlockMatcher.swift           5×5 块匹配
 │   └── CppSGMMatcher.swift               core.matchLeft
 ├── Readback/CPUImageReadback.swift       像素读回适配（锁 buffer + getBytes + 视差缓冲）
 ├── Depth/
-│   ├── DepthBackend.swift                MetalDepthBackend 协议
+│   ├── MetalDepthStage.swift             Metal 深度协议（C++ 版是具体类型）
 │   ├── MetalDepthProcessor.swift         toDepth → unrectifyDepth
 │   ├── CppDepthProcessor.swift           core.depth + unrectifyDepth
 │   └── SystemDepthProcessor.swift        AVDepthData 路径（不是 SGM 后端）
@@ -106,6 +106,10 @@ bash scripts/check_xcodeproj_sources.sh   # 只能在 macOS 上跑（需要 xcod
 C++ 与 shader 未改动，所以 golden / 几何 / 分析 / 标定的逐位结果不受本次重构影响。
 
 ### 6.2 真机回归（按顺序）
+
+> CI 现在会先在模拟器跑 `StereoVisionTests`（桥接契约：tiny golden 与 C++ 逐位一致、
+> 参数表自洽、`sampleDepth` 无状态）。模拟器通过只说明 ABI 转换没写错，
+> 相机/GPU/性能相关项仍必须真机验证。
 
 1. **Metal 模式**（`DepthSource.stereo`，SGM）：Standard / Depth / Overlay / Disparity /
    Rectified pair / Anaglyph / 3D segmentation / Point cloud 八个视图各看一眼。

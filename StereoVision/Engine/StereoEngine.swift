@@ -7,8 +7,8 @@
 //      CMSampleBuffer(左右)
 //          → FrameInputProvider      纹理 + 每帧内参 + 已配置的双摄参数
 //          → StereoGeometrySolver    SVRectification.solve → core/src/geometry.cpp
-//          → RectificationBackend    MetalRectifier
-//          → MatchingBackend         MetalSGMMatcher / MetalBlockMatcher / CppSGMMatcher
+//          → MetalRectificationStage    MetalRectifier
+//          → MetalMatchingStage         MetalSGMMatcher / MetalBlockMatcher / CppSGMMatcher
 //          → DepthBackend            MetalDepthProcessor / CppDepthProcessor
 //          → StereoFrame             → FramePipeline → DepthSceneAnalyzer → FrameReport
 //
@@ -36,9 +36,9 @@ final class StereoEngine: @unchecked Sendable {
     private let resources: MetalFrameResources
     private let inputProvider: FrameInputProvider
     private let geometrySolver: StereoGeometrySolver
-    private let rectifier: RectificationBackend
-    private let matchers: [Matcher: MatchingBackend]
-    private let metalDepth: MetalDepthBackend
+    private let rectifier: MetalRectificationStage
+    private let matchers: [Matcher: MetalMatchingStage]
+    private let metalDepth: MetalDepthStage
     private let calibrator: StereoCalibrator
     private let systemDepth: SystemDepthProcessor
     private let cppMatcher: CppSGMMatcher?

@@ -10,13 +10,15 @@
 //  没有 encoder 可给；把它塞进同一个协议只会得到一个两套语义都模糊的接口，
 //  所以它是具体类型（见 CppDepthProcessor.swift）。阶段边界仍由 `StereoEngine` 编排。
 //
+//  **可替换的单位是整条管线（`StereoMode`），不是这一个阶段。**
+//
 //  约定：disparity 单位是像素、无效值 0；depth 单位是米、无效值 0、
 //  坐标系由 geometry.K 与 MUp 决定（校正后 / 宽相机）。
 //
 
 import Metal
 
-protocol MetalDepthBackend {
+protocol MetalDepthStage {
     /// 视差 → 深度（矫正坐标系）→ 回转（宽相机坐标系，写进 `target.texture`）。
     func encode(into encoder: MTLComputeCommandEncoder,
                 disparity: MTLTexture,

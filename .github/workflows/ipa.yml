@@ -89,6 +89,29 @@ jobs:
           grep -E "BUILD SUCCEEDED|error:|warning:" /tmp/build.log | head -20 || true
           tail -5 /tmp/build.log
 
+      # 桥接契约测试（模拟器）：跨语言 ABI 与 C++ golden 逐位一致 + 参数表自洽。
+      # 没有它，Bridge 的指针/跨度/格式转换只能靠真机发现。
+      - name: Bridge contract tests (iOS Simulator)
+        run: |
+          set -euo pipefail
+          UDID=$(xcrun simctl list devices available | grep -E "iPhone" | head -1 | grep -oE "[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}")
+          if [ -z "$UDID" ]; then
+            xcrun simctl list devices available
+            echo "找不到可用的 iPhone 模拟器"
+            exit 1
+          fi
+          echo "simulator: $UDID"
+          xcodebuild test \
+            -project StereoVision.xcodeproj \
+            -scheme StereoVision \
+            -destination "id=$UDID" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            2>&1 | tail -60
+
       - name: Package unsigned IPA
         run: |
           APP="build/Build/Products/Release-iphoneos/StereoVision.app"

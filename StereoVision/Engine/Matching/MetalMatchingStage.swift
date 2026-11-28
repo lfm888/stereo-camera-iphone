@@ -1,5 +1,5 @@
 //
-//  MatchingBackend.swift
+//  MetalMatchingStage.swift
 //  StereoVision
 //
 //  匹配阶段的窄接口（Metal 侧）。
@@ -7,6 +7,11 @@
 //  阶段之间只传明确的数据对象：几何是 `StereoGeometry`，图像是纹理视图
 //  `MetalMatchInput`，参数是 `PipelineSettings`。matcher 不访问相机、不算几何、
 //  也不创建整条 pipeline —— 这些都属于输入层 / 几何求解 / 编排层。
+//
+//  **可替换的单位是整条管线（`StereoMode`），不是这一个阶段。**
+//  目前两个实现（SGM / Block）都编码进同一条 command buffer；
+//  C++ 匹配走 `CppSGMMatcher`（同步指针调用），不实现这个协议；
+//  ONNX 真出现时再按它自己的 session/输入输出建接口，不要提前抽象。
 //
 //  约定（所有 matcher 一致，与 Shaders.metal、core/src/sgm.cpp 相同）：
 //    * disparity 单位是像素，方向由 `StereoGeometry.dir` 决定（+1 = 右图同名点在左图右侧）；
@@ -36,7 +41,7 @@ struct MetalMatchInput {
 ///
 /// 未来接 ONNX 时，新增一个实现即可；如果 ONNX Runtime 需要独立的 session / 读回，
 /// 由它自己封装，不要在 `StereoEngine` 里再复制一条全流程。
-protocol MatchingBackend {
+protocol MetalMatchingStage {
     /// 7×7 Census 变换（左右各调用一次）。
     func encodeCensus(into encoder: MTLComputeCommandEncoder, source: MTLTexture, destination: MTLTexture)
 

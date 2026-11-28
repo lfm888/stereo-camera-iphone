@@ -55,12 +55,6 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
 
 // 内部写入口：只在 Bridge 里用，不暴露给 Swift（不写在公开头文件里）。
 @interface SVAnalysis ()
-/// 把内部缓冲扩到至少 count，返回可直接给 C++ 写的指针。
-///
-/// 注意是 `stereo_blob`（C 结构）：SVAnalysis 对外存的是 `SVBlobRecord`，
-/// 所以 C++ 写完之后还要 fillFromCBlobs: 翻译一次。
-- (stereo_blob *)resizeCBlobs:(NSInteger)count;
-- (unsigned char *)resizeLabels:(NSInteger)count;
 @property (nonatomic, readwrite) NSInteger blobCount;
 @property (nonatomic, readwrite) NSInteger gridWidth;
 @property (nonatomic, readwrite) NSInteger gridHeight;
@@ -374,24 +368,10 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
 @implementation SVAnalysis {
     std::vector<SVBlobRecord> _blobs;
     std::vector<uint8_t> _labels;
-    /// 给 C++ 直接写用的中间缓冲（processFrame 用，写完翻译进 _blobs）。
-    std::vector<stereo_blob> _c_blobs;
 }
 
 - (const void *)blobs { return _blobs.data(); }
 - (const void *)labels { return _labels.data(); }
-
-- (stereo_blob *)resizeCBlobs:(NSInteger)count {
-    if (count < 0) count = 0;
-    _c_blobs.resize(static_cast<size_t>(count));
-    return _c_blobs.data();
-}
-
-- (unsigned char *)resizeLabels:(NSInteger)count {
-    if (count < 0) count = 0;
-    _labels.assign(static_cast<size_t>(count), 0);
-    return _labels.data();
-}
 
 /// 只在本文件内用：把 C 的面块数组翻译成 ObjC 侧的结构（字段逐个拷，不靠"恰好对齐"）。
 - (void)fillFromCBlobs:(const stereo_blob *)src count:(NSInteger)count {
@@ -621,140 +601,6 @@ float sv_calibrate_score(void *user, int flip, float dy) {
         if ([p.key isEqualToString:key]) return p;
     }
     return nil;
-}
-
-@end
-
-// MARK: - 全流水线（stereo_process_frame）
-
-// SVFrameRequest 的属性在头文件里就是 readwrite（纯输入），不需要类扩展。
-
-@interface SVFrameTimings ()
-@property (nonatomic, readwrite) double rectify;
-@property (nonatomic, readwrite) double match;
-@property (nonatomic, readwrite) double depth;
-@property (nonatomic, readwrite) double unrectify;
-@property (nonatomic, readwrite) double analyze;
-@property (nonatomic, readwrite) double total;
-@end
-
-@implementation SVFrameTimings
-@end
-
-@implementation SVStereoCore (ProcessFrame)
-
-- (BOOL)processFrame:(const uint8_t *)left
-          leftStride:(NSInteger)leftStride
-          leftFormat:(SVImageFormat)leftFormat
-               right:(const uint8_t *)right
-         rightStride:(NSInteger)rightStride
-         rightFormat:(SVImageFormat)rightFormat
-             request:(SVFrameRequest *)request
-           disparity:(nullable float *)disparity
-          dispStride:(NSInteger)dispStride
-               depth:(float *)depth
-         depthStride:(NSInteger)depthStride
-            analysis:(SVAnalysis *)analysis
-             timings:(nullable SVFrameTimings *)timings {
-    if (_ctx == NULL) {
-        _lastError = @"context 已经释放";
-        return NO;
-    }
-    if (request == nil || request.geometry == nil || analysis == nil) return NO;
-
-    // 1) 几何：SVRectifyInput（simd）→ stereo_rectify_input（POD）
-    SVRectifyInput *in = request.geometry;
-    stereo_rectify_input geo{};
-    geo.wide = stereo_intrinsics{in.wideIntrinsics.x, in.wideIntrinsics.y, in.wideIntrinsics.z,
-                                 in.wideIntrinsics.w};
-    geo.ultra = stereo_intrinsics{in.ultraIntrinsics.x, in.ultraIntrinsics.y,
-                                  in.ultraIntrinsics.z, in.ultraIntrinsics.w};
-    copy_to_row_major(in.rotation, geo.R);
-    geo.t[0] = in.translation.x;
-    geo.t[1] = in.translation.y;
-    geo.t[2] = in.translation.z;
-    geo.src_width = (int)in.sourceWidth;
-    geo.work_width = (int)in.workWidth;
-    geo.work_height = (int)in.workHeight;
-    geo.flip = in.flip ? 1 : 0;
-    geo.dy = in.yOffset;
-
-    // 2) 匹配参数
-    stereo_config cfg{};
-    stereo_config_default(&cfg);
-    cfg.max_disp = (int)request.maxDisparity;
-    cfg.p1 = (int)request.p1;
-    cfg.p2 = (int)request.p2;
-    cfg.uniqueness = request.uniqueness;
-    cfg.lr_check = request.lrCheck ? 1 : 0;
-
-    // 3) 输出缓冲：labels 的尺寸要先问网格
-    int gw = 0, gh = 0;
-    if (stereo_analyze_grid((int)in.workWidth, (int)in.workHeight, &gw, &gh) != STEREO_OK) return NO;
-    const NSInteger cap = request.maxBlobs > 0 ? request.maxBlobs : 24;
-    stereo_blob *blobs = [analysis resizeCBlobs:cap];
-    unsigned char *labels = [analysis resizeLabels:(NSInteger)gw * (NSInteger)gh];
-
-    stereo_image li{};
-    li.data = left;
-    li.width = (int)in.sourceWidth;
-    li.height = (int)(in.sourceHeight);
-    li.stride_bytes = (int)leftStride;
-    li.format = (int)leftFormat;
-
-    stereo_image ri = li;
-    ri.data = right;
-    ri.stride_bytes = (int)rightStride;
-    ri.format = (int)rightFormat;
-
-    const float center[4] = {request.centerRect.x, request.centerRect.y, request.centerRect.z,
-                             request.centerRect.w};
-
-    stereo_frame_input fin{};
-    fin.left = &li;
-    fin.right = &ri;
-    fin.geometry = &geo;
-    fin.config = &cfg;
-    fin.min_z = request.minZ;
-    fin.max_z = request.maxZ;
-    fin.analysis.fx = 0;   // 会被矫正后的 K 覆盖
-    fin.analysis.max_blobs = (int)(request.maxBlobs > 0 ? request.maxBlobs : 24);
-    fin.analysis.min_cells = (int)(request.minCells > 0 ? request.minCells : 40);
-    fin.center_rect = request.computeCenter ? center : nullptr;
-    fin.center_q = request.centerQ;
-
-    stereo_frame_output fout{};
-    fout.disp = disparity;
-    fout.disp_stride_px = (int)dispStride;
-    fout.depth = depth;
-    fout.depth_stride_px = (int)depthStride;
-    fout.blobs = blobs;
-    fout.blob_capacity = (int)(request.maxBlobs > 0 ? request.maxBlobs : 24);
-    fout.labels = labels;
-
-    stereo_frame_timings ft{};
-    if (stereo_process_frame(_ctx, &fin, &fout, timings != nil ? &ft : nullptr) != STEREO_OK) {
-        _lastError = [NSString stringWithUTF8String:stereo_last_error(_ctx)];
-        return NO;
-    }
-
-    [analysis fillFromCBlobs:blobs count:(NSInteger)fout.analysis.blob_count];
-    analysis.blobCount = fout.analysis.blob_count;
-    analysis.gridWidth = fout.analysis.grid_width;
-    analysis.gridHeight = fout.analysis.grid_height;
-    analysis.hasCenter = fout.analysis.has_center != 0;
-    analysis.center = fout.analysis.center;
-
-    if (timings != nil) {
-        timings.rectify = ft.rectify;
-        timings.match = ft.match;
-        timings.depth = ft.depth;
-        timings.unrectify = ft.unrectify;
-        timings.analyze = ft.analyze;
-        timings.total = ft.total;
-    }
-    _lastError = @"";
-    return YES;
 }
 
 @end

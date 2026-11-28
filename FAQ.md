@@ -292,7 +292,7 @@ xcodegen generate && open StereoVision.xcodeproj
 | CI 流水线 | 内容 |
 |---|---|
 | `Build C++ core` | ubuntu / windows / macOS 三平台编译 + 逐位对拍 + C API 冒烟 |
-| `Build unsigned IPA` | Apple clang 编译 `core/` + ObjC++ 桥接 + Swift，产出未签名 IPA |
+| `Build unsigned IPA` | Apple clang 编译 `core/` + ObjC++ 桥接 + Swift；在 iPhone 模拟器上跑 `StereoVisionTests`（桥接契约：tiny golden 与 C++ 逐位一致）；产出未签名 IPA |
 
 ```bash
 ./scripts/fetch_ipa.sh   # → build/StereoVision-unsigned.ipa

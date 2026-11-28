@@ -1,5 +1,5 @@
 //
-//  RectificationBackend.swift
+//  MetalRectificationStage.swift
 //  StereoVision
 //
 //  矫正阶段的窄接口。
@@ -13,11 +13,16 @@
 //  目前只有一个实现（MetalRectifier）：C++ 的 `stereo_rectify_image` 在 Bridge 里没有暴露，
 //  所以不建 CppRectifier（"确有 C++ 矫正 API 时再添加"）。
 //
+//  **可替换的单位是整条管线（`StereoMode`），不是这一个阶段。**
+//  名字带 Metal 是刻意的：这个协议只描述"往 encoder 里编码"的形状，
+//  C++ / ONNX 的实现不会有这个形状（同步、无 encoder），
+//  等真的出现第二种来源时再为它建独立接口，不要为了"将来可能"提前抽象。
+//
 
 import Metal
 import simd
 
-protocol RectificationBackend {
+protocol MetalRectificationStage {
     /// 把 `source` 按单应 `transform` 重采样到 `destination`（两者尺寸相同、格式相同）。
     func encode(into encoder: MTLComputeCommandEncoder,
                 source: MTLTexture,

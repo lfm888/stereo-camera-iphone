@@ -178,14 +178,14 @@ include guard；CMake 为每个头生成一个只 include 它的 `.c`（`stereo_
 | `StereoConfiguration.swift` | 34 | 后端组合（配置，不是流程分支） | `StereoMode`（`.metal` / `.cppHybrid`）、`PipelineSettings.stereoMode` |
 | `Input/FrameInputProvider.swift` | 73 | 相机输入适配：样本 → 纹理 + 每帧内参 + `CameraRig` | `FrameInputs`、`FrameInputProvider` |
 | `Geometry/StereoGeometrySolver.swift` | 52 | 第 2 步几何，交给 `SVRectification.solve`（core/src/geometry.cpp） | `solve(rig:wide:ultra:...)` |
-| `Rectification/RectificationBackend.swift` | 26 | 矫正阶段窄接口（编码进调用方的 command buffer） | `RectificationBackend` |
+| `Rectification/MetalRectificationStage.swift` | 30 | 矫正阶段的 **Metal** 接口（编码进调用方的 command buffer）；可替换单位是整条管线 | `MetalRectificationStage` |
 | `Rectification/MetalRectifier.swift` | 31 | `rectify` kernel | `MetalRectifier` |
-| `Matching/MatchingBackend.swift` | 56 | 匹配阶段窄接口 + 纹理视图 | `MatchingBackend`（`encodeCensus`/`encodeMatch`）、`MetalMatchInput` |
+| `Matching/MetalMatchingStage.swift` | 60 | 匹配阶段的 **Metal** 接口 + 纹理视图（C++ 走 `CppSGMMatcher`，不实现它） | `MetalMatchingStage`（`encodeCensus`/`encodeMatch`）、`MetalMatchInput` |
 | `Matching/MetalSGMMatcher.swift` | 77 | SGM 4 路径（costVolume → sgmPath×4 → wta） | `MetalSGMMatcher`（持有 cost/sum 缓冲、dispRight） |
 | `Matching/MetalBlockMatcher.swift` | 39 | 5×5 块匹配（也被标定打分复用） | `MetalBlockMatcher` |
 | `Matching/CppSGMMatcher.swift` | 40 | C++ 匹配（core/src/sgm.cpp），同步调用 | `configure`/`match` |
 | `Readback/CPUImageReadback.swift` | 77 | 显式像素读回适配：锁 buffer + `getBytes` + 视差缓冲 | `CPUImageReadback` |
-| `Depth/DepthBackend.swift` | 27 | 深度阶段窄接口（只有 Metal 版有 encoder 形状） | `MetalDepthBackend` |
+| `Depth/MetalDepthStage.swift` | 30 | 深度阶段的 **Metal** 接口（只有它有 encoder 形状；C++ 版是具体类型） | `MetalDepthStage` |
 | `Depth/MetalDepthProcessor.swift` | 39 | `toDepth` → `unrectifyDepth` | `MetalDepthProcessor` |
 | `Depth/CppDepthProcessor.swift` | 48 | C++ `depth(fromDisparity:)` + `unrectifyDepth`（直接写共享 buffer） | `CppDepthProcessor` |
 | `Depth/SystemDepthProcessor.swift` | 55 | 系统深度（AVDepthData）→ `filterDepth`，**不是** SGM 后端 | `SystemDepthProcessor` |
@@ -198,7 +198,17 @@ include guard；CMake 为每个头生成一个只 include 它的 `.c`（`stereo_
 
 阶段与后端的对应关系、以及每帧/每资源跑在哪个线程、谁写谁读，见 `docs/engine-backend-baseline.md`。
 
-### 3.3 GPU
+### 3.3 iOS 测试（`StereoVisionTests/`）
+
+| 文件 | 行 | 覆盖 |
+|---|---|---|
+| `BridgeContractTests.swift` | 136 | ① tiny golden 经 `SVStereoCore.matchLeft` 与 C++ `disp_f32` **逐位一致**（跨语言 ABI）；② 参数表自洽（id/key 唯一、默认值在范围内、枚举标签条数）；③ `sampleDepth` 无状态契约 |
+| `NPY.swift` | 132 | 极简 .npy 读取（对应 `core/tests/npy.hpp`），夹具直接引用 `core/tests/golden/*.npy` |
+
+它不是算法测试：算法仍由 `core/tests` 的 7 个套件 + golden 对拍负责。这个 target 只回答
+"Swift ↔ ObjC++ ↔ C 的指针/跨度/格式转换有没有错" —— 这类错误在真机上只表现为"深度不对"。
+
+### 3.4 GPU
 
 | 文件 | 行 | 内容 |
 |---|---|---|
@@ -342,7 +352,7 @@ BGRA 双帧 ─GPU rectify→ 640×360 左右图 ─Metal SGM→ 视差 ─toDep
 | 4 | 两条系统深度分支 | `DepthSource.apple`/`.lidar` + `Engine/Depth/SystemDepthProcessor.swift`（~55 行）+ `CameraSessionController.makeDepth`（~45 行） | 如果只用自研双目，整条可删 |
 | 5 | `CameraCalibrationReader.calibration(of:)` / `.extrinsics(from:to:)` | 只在 `rig()` 里各用一次；每帧真正用的是 `intrinsics(of:fov:size:)` | 三者能否合一 |
 | 6 | ~~双份"视差后"实现~~ | **2.00 已合并**：`stereo_process_disparity` 一次做完 to_depth + unrectify，`process_frame` 与 iOS 的 `CppDepthProcessor` 都走它（少一次跨桥调用，数值不变） | 已解决，无待办 |
-| 7 | `core/tests/` 2351 行 | 不是运行时代码，但它是"改 C++ 不出错"的唯一保障（**iOS 侧没有任何测试**） | 删测试 = 放弃回归保护 |
+| 7 | `core/tests/` 2351 行 + `StereoVisionTests/` | C++ 侧 7 个套件 + golden 对拍；iOS 侧现在有一组**桥接契约**测试（模拟器，CI 跑） | 算法正确性仍只靠 C++ 测试；iOS 测试只保 ABI/参数表 |
 | 8 | `MetalSceneRenderer` 的矩阵工具 | `perspective`/`translate`/`rotateX/Y/Z`（~25 行）只服务点云视图 | 值得留 |
 | 9 | `tools/` 下的脚本 | `sgm_ref.py`+`gen_golden.py` 是金标准的来源（有用）；`viewer.html` / `make_demo_export.py` 用途不明 | 后两个确认没人用可删 |
 | 10 | 文档 | `test.md` 981 行（过程记录）、`FAQ.md`、`ARCHITECTURE.md`、`docs/engine-backend-{baseline,refactor}.md`、`stereovision_agent.md`（目录整理方案）；已删除无引用的 24 MB 演示素材（`demo.gif` / `demo.mp4` / `get_gif.py` / `self-logo.png`） | 过程文档按需留；两份 engine 文档 + 目录方案是这次重构的唯一说明 |
@@ -379,6 +389,7 @@ cd build/core && ctest -C Release
 |---|---|---|
 | C++ 对拍 + 几何/分析/标定测试（7 个套件） | 本机即可（Windows/Linux/macOS，零第三方依赖） | `cmake -S core -B build/core -DCMAKE_BUILD_TYPE=Release && cmake --build build/core --config Release && cd build/core && ctest -C Release` |
 | 未签名 IPA | GitHub Actions 的 macOS runner（`.github/workflows/ipa.yml`；push `main`/`test` 或手动 dispatch） | CI：`xcodegen generate` → `scripts/check_xcodeproj_sources.sh` → `xcodebuild`（`CODE_SIGNING_ALLOWED=NO`）→ 打成 `Payload/` zip |
+| 桥接契约测试（iOS） | macOS runner 的 iPhone 模拟器 | CI：`xcodebuild test -scheme StereoVision -destination <sim UDID>`；夹具是 `core/tests/golden` 的 tiny 向量 |
 | CLI（第二个前端） | 本机 / CI 三平台矩阵 | `cmake -S . -B build/all -DCMAKE_BUILD_TYPE=Release && cmake --build build/all --config Release --target stereo_cli`；夹具在 `apps/cli/testdata/`（160×120 PNM + key=value 标定） |
 | 取回 IPA | 本地（需要 GitHub token，脚本会先问 `git credential`） | `./scripts/fetch_ipa.sh` → `build/StereoVision-unsigned.ipa` |
 | 工程文件 | CI / macOS 本地 | `xcodegen generate --spec project.yml`（`.xcodeproj` 不入库） |

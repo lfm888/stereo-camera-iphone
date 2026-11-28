@@ -11,7 +11,7 @@
 import Metal
 import simd
 
-final class MetalRectifier: RectificationBackend {
+final class MetalRectifier: MetalRectificationStage {
     private let pipeline: MTLComputePipelineState
     private let dispatch: MetalDispatch
 
