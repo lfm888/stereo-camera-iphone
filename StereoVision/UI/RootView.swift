@@ -14,14 +14,39 @@
 //  Rendering/MetalView.swift 包着，所以 UI/ 里不会出现 MetalKit / AVFoundation。
 //
 
+import Foundation
 import SwiftUI
 
+@MainActor
 struct RootView: View {
-    @State private var model = AppModel()
+    @State private var model = RootView.makeModel()
     @State private var showSettings = false
     @State private var showDiagnostics = false
 
+    /// 单元测试宿主启动时**不要**创建引擎。
+    ///
+    /// `StereoVisionTests` 是桥接契约测试，只需要 `SVStereoCore`；而 `AppModel.init`
+    /// 会建 `StereoEngine` → `DepthTarget`（共享 MTLBuffer 上的线性纹理）。
+    /// 模拟器的 Metal 不允许这种组合（真机允许），宿主 App 会启动即崩，测试永远跑不到。
+    /// 这不是产品路径：只有 XCTest 注入的 `XCTestConfigurationFilePath` 存在时才跳过。
+    private static func makeModel() -> AppModel? {
+        let env = ProcessInfo.processInfo.environment
+        // XCTest 注入环境变量；Loaded XCTest.framework 是第二重保险（不同 Xcode 版本行为有差异）。
+        let underTests = env["XCTestConfigurationFilePath"] != nil
+            || NSClassFromString("XCTestCase") != nil
+        return underTests ? nil : AppModel()
+    }
+
     var body: some View {
+        if let model {
+            content(model)
+        } else {
+            // 测试宿主：不渲染相机界面，也不需要相机权限。
+            Color.black.ignoresSafeArea()
+        }
+    }
+
+    private func content(_ model: AppModel) -> some View {
         CaptureScreen(state: model.ui,
                       intents: model,
                       renderer: model.renderer,
