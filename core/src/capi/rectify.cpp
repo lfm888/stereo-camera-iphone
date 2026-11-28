@@ -7,13 +7,14 @@
 
 extern "C" {
 
-int stereo_rectify_geometry(const stereo_rectify_input *in, stereo_rectify_output *out) {
-    if (in == nullptr || out == nullptr) return -1;
+stereo_status stereo_rectify_geometry(const stereo_rectify_input *in,
+                                      stereo_rectify_output *out) {
+    if (in == nullptr || out == nullptr) return STEREO_INVALID_ARGUMENT;
 
     stereo::RectifyInput ri = capi::to_rectify_input(*in);
 
     stereo::RectifyOutput g;
-    if (!stereo::rectify_geometry(ri, &g)) return -1;
+    if (!stereo::rectify_geometry(ri, &g)) return STEREO_INVALID_ARGUMENT;
 
     capi::from_mat3(g.to_wide_image, out->to_wide_image);
     capi::from_mat3(g.to_ultra_image, out->to_ultra_image);
@@ -33,26 +34,29 @@ int stereo_rectify_geometry(const stereo_rectify_input *in, stereo_rectify_outpu
         out->p_right[i] = g.P_right[i];
     }
     for (int i = 0; i < 16; ++i) out->q[i] = g.Q[i];
-    return 0;
+    return STEREO_OK;
 }
 
-int stereo_rectify_image(const stereo_image *src, const float m[9], stereo_image *dst) {
-    if (!capi::valid_image(src) || !capi::valid_image(dst) || m == nullptr) return -1;
+stereo_status stereo_rectify_image(const stereo_image *src, const float m[9],
+                                   stereo_image *dst) {
+    if (!capi::valid_image(src) || !capi::valid_image(dst) || m == nullptr) {
+        return STEREO_INVALID_ARGUMENT;
+    }
     // dst->data 会被写入（头文件已说明调用方必须传可写缓冲）。
     return stereo::rectify_image(stereo::view_of(*src), capi::to_mat3(m),
                                  stereo::mutable_view_of(*dst))
-               ? 0
-               : -1;
+               ? STEREO_OK
+               : STEREO_INVALID_ARGUMENT;
 }
 
-int stereo_unrectify_depth(const float *src, int src_stride, int src_width, int src_height,
-                           const float m[9], float *dst, int dst_stride, int dst_width,
-                           int dst_height) {
-    if (src == nullptr || dst == nullptr || m == nullptr) return -1;
-    return stereo::unrectify_depth(src, src_width, src_height, src_stride, capi::to_mat3(m), dst,
-                                   dst_width, dst_height, dst_stride)
-               ? 0
-               : -1;
+stereo_status stereo_unrectify_depth(const float *src, int src_stride_px, int src_width,
+                                     int src_height, const float m[9], float *dst,
+                                     int dst_stride_px, int dst_width, int dst_height) {
+    if (src == nullptr || dst == nullptr || m == nullptr) return STEREO_INVALID_ARGUMENT;
+    return stereo::unrectify_depth(src, src_width, src_height, src_stride_px, capi::to_mat3(m),
+                                   dst, dst_width, dst_height, dst_stride_px)
+               ? STEREO_OK
+               : STEREO_INVALID_ARGUMENT;
 }
 
 } /* extern "C" */

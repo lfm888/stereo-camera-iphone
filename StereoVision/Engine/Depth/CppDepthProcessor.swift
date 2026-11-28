@@ -2,26 +2,23 @@
 //  CppDepthProcessor.swift
 //  StereoVision
 //
-//  深度阶段的 C++ 实现（`.cppHybrid` 模式）：
-//    core.depth(fromDisparity:)      视差 → 深度（3×3 中值 + 范围截断，core/src/sgm.cpp）
-//    SVStereoCore.unrectifyDepth     深度回转（core/src/rectify.cpp，逐条对齐 unrectifyDepth kernel）
+//  深度阶段的 C++ 实现（`.cppHybrid` 模式）：视差 → 深度 → 回转。
 //
-//  两步都是同步调用。第二步**直接写进 DepthTarget 背后的共享 MTLBuffer**，
-//  所以不需要一次上传/回读（改造前就是这样，注释里说"再起一个 command buffer"是旧实现）。
+//  API 2.00 起用 core 的 `stereo_process_disparity`（经 Bridge 的 `+processDisparity:`）：
+//  一次调用做完 "to_depth + unrectify"，与 `stereo_process_frame` 内部是同一份实现。
+//  与 iOS 的 Metal 路径相比，这里唯一的区别是回转发生在 CPU、直接写进 DepthTarget
+//  背后的共享 MTLBuffer（一次上传/回读都不需要）。
 //
-//  临时缓冲（depthRaw）在这里分配、调用返回前释放；分配计入 depthMs（口径与改造前一致）。
+//  它是**无状态**的（2.00 去掉了 sample_depth / disparity_to_depth 的 ctx），
+//  所以不再持有 SVStereoCore —— 主线程的查询不再需要第二个 context。
+//
+//  临时缓冲（depthRect）在这里分配、调用返回前释放；分配计入 depthMs（与改造前一致）。
 //
 
 import Foundation
 import Metal
 
 final class CppDepthProcessor {
-    private let core: SVStereoCore
-
-    init(core: SVStereoCore) {
-        self.core = core
-    }
-
     func makeDepth(disparity: UnsafePointer<Float>,
                    disparityStride: Int,
                    width: Int,
@@ -29,20 +26,17 @@ final class CppDepthProcessor {
                    geometry g: StereoGeometry,
                    settings s: PipelineSettings,
                    target: DepthTarget) -> Bool {
-        let depthRaw = UnsafeMutablePointer<Float>.allocate(capacity: width * height)
-        defer { depthRaw.deallocate() }
+        let depthRect = UnsafeMutablePointer<Float>.allocate(capacity: width * height)
+        defer { depthRect.deallocate() }
 
-        // ObjC 导入器会把 `depthFromDisparity:` 按 SE-0005 改写成 `depth(fromDisparity:)`，
-        // 这里必须用改写后的名字，否则 Swift 5 语言模式下是 error。
-        guard core.depth(fromDisparity: disparity, dispStride: disparityStride,
-                         width: width, height: height, fB: g.fB,
-                         minZ: s.minZ, maxZ: s.maxZ,
-                         depth: depthRaw, depthStride: width) else { return false }
-
-        return SVStereoCore.unrectifyDepth(depthRaw, srcStride: width, width: width, height: height,
-                                           transform: g.MUp,
-                                           dst: target.buffer.contents().assumingMemoryBound(to: Float.self),
-                                           dstStride: target.bytesPerRow / 4,
-                                           dstWidth: width, dstHeight: height)
+        return SVStereoCore.processDisparity(disparity,
+                                            dispStride: disparityStride,
+                                            width: width, height: height,
+                                            fB: g.fB, minZ: s.minZ, maxZ: s.maxZ,
+                                            transform: g.MUp,
+                                            depth: target.buffer.contents()
+                                                .assumingMemoryBound(to: Float.self),
+                                            depthStride: target.bytesPerRow / 4,
+                                            depthRectScratch: depthRect)
     }
 }

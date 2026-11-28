@@ -22,8 +22,9 @@ extern "C" {
 /* 这是"有哪些参数、范围、默认值、步长"的**唯一真源**：stereo_config_default() */
 /* 的默认值也来自这张表。Swift / Qt 界面应该按表生成滑杆，不要各写一份。      */
 /*                                                                     */
-/* 注意：表里的 min/max 是**建议给界面的范围**，不一定等于库能接受的硬范围    */
-/* （例如库接受 max_disp 4..96，而 App 的滑杆只给 32/64/96 三档）。           */
+/* 2.00 起同时给出**库硬范围**（hard_*）：界面用建议范围（min_value/max_value）  */
+/* 做滑杆，用硬范围做越界校验。hard_*_enforced == 0 表示这一侧没有单独校验     */
+/* （例如库接受 max_disp 4..96，而 App 的滑杆只给 32/64/96 三档）。            */
 /* ------------------------------------------------------------------ */
 
 /** 参数 id。已发布的顺序不要改，新参数往末尾加。 */
@@ -57,10 +58,14 @@ typedef struct stereo_param_desc {
     const char *label;      /**< 显示名，例如 "Max disparity" */
     const char *group;      /**< 分组："depth" / "matching" / "display" */
     int kind;               /**< enum stereo_param_kind */
-    float min_value;
+    float min_value;          /**< 建议范围（界面滑杆） */
     float max_value;
     float step;
     float default_value;
+    float hard_min;           /**< 库硬下限（hard_min_enforced != 0 时有效） */
+    float hard_max;           /**< 库硬上限（hard_max_enforced != 0 时有效） */
+    int hard_min_enforced;
+    int hard_max_enforced;
     const char *unit;       /**< "m" / "px" / ""（可为空串，不会是 NULL） */
     const char *enum_labels;/**< kind==ENUM 时用 '|' 分隔；否则 NULL */
 } stereo_param_desc;

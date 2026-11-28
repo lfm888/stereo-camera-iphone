@@ -418,6 +418,9 @@ kernel 的耗时（要拆得用 `MTLCounterSampleBuffer`）。C++ 路径天然�
 - 改了 `core/` → 必须重跑 `golden_test`；不是逐位一致就是 bug，不是「精度差异」。
 - `core/` 不允许 include Apple 头（见 Q3）。
 - 不允许 C++ 异常越过 `stereo_c_api.h`（Swift 无法展开 C++ 异常）。
+- 可能失败的 C 函数返回 `stereo_status`（0 = `STEREO_OK`）；"有效样本不足"这类正常结果
+  用输出参数（如 `stereo_sample_depth` 的 `out_has_value`），不占错误码。
+- stride 参数/字段带单位后缀：图像 `_bytes`，深度/视差 `_px`（2.00 起）。
 - 提交前自查：删掉的符号在 Swift 侧是否还有引用（本地没有 Swift 编译器，只能靠 grep + CI）。
 
 ---

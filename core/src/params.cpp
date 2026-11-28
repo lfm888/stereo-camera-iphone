@@ -21,31 +21,31 @@ namespace {
 const stereo_param_desc kParams[] = {
     // ---- 深度范围 ----
     {STEREO_PARAM_MIN_Z, "min_z", "Min depth", "depth", STEREO_PARAM_FLOAT,
-     0.05f, 1.0f, 0.01f, 0.12f, "m", nullptr},
+     0.05f, 1.0f, 0.01f, 0.12f, 0.0f, 0.0f, 0, 0, "m", nullptr},
     {STEREO_PARAM_MAX_Z, "max_z", "Max depth", "depth", STEREO_PARAM_FLOAT,
-     0.5f, 8.0f, 0.1f, 3.0f, "m", nullptr},
+     0.5f, 8.0f, 0.1f, 3.0f, 0.0f, 0.0f, 0, 0, "m", nullptr},
 
     // ---- 匹配 ----
     {STEREO_PARAM_MATCHER, "matcher", "Algorithm", "matching", STEREO_PARAM_ENUM,
-     0.0f, 1.0f, 1.0f, 0.0f, "", "SGM 4 paths|Block matching 5x5"},
+     0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0, 0, "", "SGM 4 paths|Block matching 5x5"},
     {STEREO_PARAM_MAX_DISP, "max_disparity", "Max disparity", "matching", STEREO_PARAM_INT,
-     32.0f, 96.0f, 32.0f, 64.0f, "px", nullptr},
+     32.0f, 96.0f, 32.0f, 64.0f, 4.0f, 96.0f, 1, 1, "px", nullptr},
     {STEREO_PARAM_P1, "p1", "P1 (1 px jumps)", "matching", STEREO_PARAM_INT,
-     1.0f, 40.0f, 1.0f, 8.0f, "", nullptr},
+     1.0f, 40.0f, 1.0f, 8.0f, 0.0f, 0.0f, 1, 0, "", nullptr},
     {STEREO_PARAM_P2, "p2", "P2 (discontinuities)", "matching", STEREO_PARAM_INT,
-     20.0f, 200.0f, 1.0f, 96.0f, "", nullptr},
+     20.0f, 200.0f, 1.0f, 96.0f, 0.0f, 0.0f, 1, 0, "", nullptr},
     {STEREO_PARAM_LR_CHECK, "lr_check", "Left-right check", "matching", STEREO_PARAM_BOOL,
-     0.0f, 1.0f, 1.0f, 1.0f, "", nullptr},
+     0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0, 0, "", nullptr},
     {STEREO_PARAM_UNIQUENESS, "uniqueness", "Uniqueness", "matching", STEREO_PARAM_FLOAT,
-     0.0f, 0.5f, 0.01f, 0.1f, "", nullptr},
+     0.0f, 0.5f, 0.01f, 0.1f, 0.0f, 0.0f, 0, 0, "", nullptr},
     {STEREO_PARAM_Y_OFFSET, "y_offset", "Vertical offset", "matching", STEREO_PARAM_FLOAT,
-     -12.0f, 12.0f, 0.25f, 0.0f, "px", nullptr},
+     -12.0f, 12.0f, 0.25f, 0.0f, 0.0f, 0.0f, 0, 0, "px", nullptr},
     {STEREO_PARAM_FLIP, "flip_baseline", "Flip baseline", "matching", STEREO_PARAM_BOOL,
-     0.0f, 1.0f, 1.0f, 0.0f, "", nullptr},
+     0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f, 0, 0, "", nullptr},
 
     // ---- 显示（不参与匹配，只是叠加层/预览的显示参数）----
     {STEREO_PARAM_OVERLAY_ALPHA, "overlay_alpha", "Overlay opacity", "display", STEREO_PARAM_FLOAT,
-     0.0f, 1.0f, 0.01f, 0.55f, "", nullptr},
+     0.0f, 1.0f, 0.01f, 0.55f, 0.0f, 0.0f, 0, 0, "", nullptr},
 };
 
 static_assert(sizeof(kParams) / sizeof(kParams[0]) == STEREO_PARAM_COUNT,

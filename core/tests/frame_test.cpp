@@ -67,7 +67,7 @@ struct Frame {
         img.data = px.data();
         img.width = SRC_W;
         img.height = SRC_H;
-        img.stride = stride;
+        img.stride_bytes = stride;
         img.format = STEREO_FORMAT_BGRA8;
         return img;
     }
@@ -179,6 +179,18 @@ int main() {
         std::snprintf(buf, sizeof buf, "D=%d p1=%d p2=%d u=%.2f lr=%d", cfg.max_disp, cfg.p1, cfg.p2,
                       static_cast<double>(cfg.uniqueness), cfg.lr_check);
         report("stereo_config_default 与参数表一致", ok, buf);
+
+        // 2.00：参数表要带"库硬范围"，且库真的按它拒绝
+        const bool hard_ok = d_disp != nullptr && d_disp->hard_min_enforced != 0 &&
+                             d_disp->hard_max_enforced != 0 && d_disp->hard_min == 4.0f &&
+                             d_disp->hard_max == 96.0f;
+        report("参数表带库硬范围（max_disp 4..96）", hard_ok);
+        stereo_context* probe = stereo_create();
+        stereo_config bad = cfg;
+        bad.max_disp = 3;
+        const bool rejected = probe != nullptr && stereo_configure(probe, &bad) != STEREO_OK;
+        stereo_destroy(probe);
+        report("configure 拒绝硬范围外的 max_disp", rejected);
     }
 
     // ---------------- 3) stereo_process_frame ----------------
@@ -205,9 +217,9 @@ int main() {
 
     stereo_frame_output out{};
     out.disp = disp_pf.data();
-    out.disp_stride = W;
+    out.disp_stride_px = W;
     out.depth = depth_pf.data();
-    out.depth_stride = W;
+    out.depth_stride_px = W;
     out.blobs = blobs_pf.data();
     out.blob_capacity = 24;
     out.labels = labels_pf.data();
@@ -260,7 +272,7 @@ int main() {
         imgl.data = rl.data();
         imgl.width = W;
         imgl.height = H;
-        imgl.stride = W * 4;
+        imgl.stride_bytes = W * 4;
         imgl.format = STEREO_FORMAT_BGRA8;
         stereo_image imgr = imgl;
         imgr.data = rr.data();
@@ -269,11 +281,18 @@ int main() {
 
         std::vector<float> disp(n, 0.0f), depth_rect(n, 0.0f), depth(n, 0.0f);
         const bool ok_match = stereo_match(ctx, &imgl, &imgr, g.dir, disp.data(), W) == 0;
-        const bool ok_depth = stereo_disparity_to_depth(ctx, disp.data(), W, W, H, g.focal_baseline,
+        const bool ok_depth = stereo_disparity_to_depth(disp.data(), W, W, H, g.focal_baseline,
                                                         in.min_z, in.max_z, depth_rect.data(),
                                                         W) == 0;
         const bool ok_unrect = stereo_unrectify_depth(depth_rect.data(), W, W, H, g.to_rect_image,
                                                      depth.data(), W, W, H) == 0;
+
+        // 2.00：合并入口必须与"手工 to_depth + unrectify"逐位一致
+        std::vector<float> depth_comb(n, 0.0f), rect_scratch(n, 0.0f);
+        const bool ok_comb =
+            stereo_process_disparity(disp.data(), W, W, H, g.focal_baseline, in.min_z, in.max_z,
+                                     g.to_rect_image, depth_comb.data(), W,
+                                     rect_scratch.data()) == STEREO_OK;
 
         stereo_analyze_params ap{};
         ap.fx = g.k.fx;
@@ -294,6 +313,8 @@ int main() {
         const bool same_labels = std::memcmp(labels.data(), labels_pf.data(), n) == 0;
         report("手工 6 步与 process_frame 逐位一致（视差）", ok_all && same_disp);
         report("手工 6 步与 process_frame 逐位一致（深度）", ok_all && same_depth);
+        report("process_disparity == 手工两步（深度逐位一致）",
+               ok_comb && std::memcmp(depth_comb.data(), depth.data(), n * 4) == 0);
         report("手工 6 步与 process_frame 逐位一致（标签图）", ok_all && same_labels);
         report("手工 6 步与 process_frame 一致（面块数/中心读数）",
                ok_all && analysis.blob_count == out.analysis.blob_count &&

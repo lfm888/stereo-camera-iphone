@@ -47,9 +47,10 @@ typedef struct stereo_calibrate_result {
  *
  * 成功返回 0。ctx 为 scratch 宿主（不是线程安全的，和 stereo_match 一样）。
  */
-int stereo_calibrate(stereo_context *ctx, const stereo_rectify_input *geometry,
-                     const stereo_image *wide, const stereo_image *ultra,
-                     const stereo_calibrate_params *params, stereo_calibrate_result *out);
+stereo_status stereo_calibrate(stereo_context *ctx, const stereo_rectify_input *geometry,
+                               const stereo_image *wide, const stereo_image *ultra,
+                               const stereo_calibrate_params *params,
+                               stereo_calibrate_result *out);
 
 /**
  * 打分回调：给一个候选 (flip, dy)，返回平均匹配代价（越小越对齐）。失败返回 INFINITY。
@@ -64,9 +65,9 @@ typedef float (*stereo_score_fn)(void *user, int flip, float dy);
  *
  * 成功返回 0；score 为空或全部打分失败返回非 0。
  */
-int stereo_calibrate_search(stereo_score_fn score, void *user,
-                            const stereo_calibrate_params *params,
-                            stereo_calibrate_result *out);
+stereo_status stereo_calibrate_search(stereo_score_fn score, void *user,
+                                      const stereo_calibrate_params *params,
+                                      stereo_calibrate_result *out);
 
 #ifdef __cplusplus
 } /* extern "C" */

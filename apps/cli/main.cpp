@@ -77,7 +77,7 @@ stereo_image make_view(const cli::Image& img) {
     v.data = img.pixels.data();
     v.width = img.width;
     v.height = img.height;
-    v.stride = img.stride();
+    v.stride_bytes = img.stride();
     v.format = img.channels == 1 ? STEREO_FORMAT_GRAY8 : STEREO_FORMAT_RGB8;
     return v;
 }
@@ -229,9 +229,9 @@ int main(int argc, char** argv) {
 
     stereo_frame_output out{};
     out.depth = depth.data();
-    out.depth_stride = W;
+    out.depth_stride_px = W;
     out.disp = disp.empty() ? nullptr : disp.data();
-    out.disp_stride = W;
+    out.disp_stride_px = W;
     out.labels = labels.empty() ? nullptr : labels.data();
 
     stereo_frame_timings timing{};

@@ -1,18 +1,47 @@
-// capi/pipeline.cpp — 第 2..5 步全流水线的**翻译层**
+// capi/pipeline.cpp — 第 2..5 步全流水线 + 视差→深度→回转的**翻译层**
 //
-// 领域：stereo_pipeline.h。本体在 core/src/pipeline.cpp（stereo::process_frame）；
-// 这里只做：校验入参 → POD → C++ 结构 → 调用 → 结果写回 POD。
-// 不出现像素循环，也不出现算法。
+// 领域：stereo_pipeline.h。本体在 core/src/pipeline.cpp；这里只做：
+// 校验入参 → POD → C++ 结构 → 调用 → 结果写回 POD。不出现像素循环，也不出现算法。
 
 #include "capi_internal.hpp"
 
 #include "stereo/pipeline.hpp"
 
+namespace {
+
+stereo_status map_status(stereo::FrameStatus status) {
+    switch (status) {
+        case stereo::FrameStatus::ok: return STEREO_OK;
+        case stereo::FrameStatus::invalid_argument: return STEREO_INVALID_ARGUMENT;
+        case stereo::FrameStatus::out_of_memory: return STEREO_OUT_OF_MEMORY;
+        case stereo::FrameStatus::unsupported_format: return STEREO_UNSUPPORTED_FORMAT;
+        case stereo::FrameStatus::internal_error: return STEREO_INTERNAL_ERROR;
+    }
+    return STEREO_INTERNAL_ERROR;
+}
+
+}  // namespace
+
 extern "C" {
 
-int stereo_process_frame(stereo_context *ctx, const stereo_frame_input *in,
-                         stereo_frame_output *out, stereo_frame_timings *timings) {
-    if (ctx == nullptr) return -1;
+stereo_status stereo_process_disparity(const float *disp, int disp_stride_px, int width,
+                                       int height, float fB, float min_z, float max_z,
+                                       const float m_up[9], float *depth, int depth_stride_px,
+                                       float *depth_rect_scratch) {
+    if (disp == nullptr || depth == nullptr || m_up == nullptr || depth_rect_scratch == nullptr) {
+        return STEREO_INVALID_ARGUMENT;
+    }
+    if (width <= 0 || height <= 0) return STEREO_INVALID_ARGUMENT;
+    return stereo::process_disparity(disp, disp_stride_px, width, height, fB, min_z, max_z,
+                                     capi::to_mat3(m_up), depth, depth_stride_px,
+                                     depth_rect_scratch)
+               ? STEREO_OK
+               : STEREO_INVALID_ARGUMENT;
+}
+
+stereo_status stereo_process_frame(stereo_context *ctx, const stereo_frame_input *in,
+                                   stereo_frame_output *out, stereo_frame_timings *timings) {
+    if (ctx == nullptr) return STEREO_INVALID_ARGUMENT;
     if (in == nullptr || out == nullptr) {
         return capi::fail(ctx, "process_frame: in/out is NULL");
     }
@@ -47,17 +76,16 @@ int stereo_process_frame(stereo_context *ctx, const stereo_frame_input *in,
 
     stereo::FrameOutput fo;
     fo.depth = out->depth;
-    fo.depth_stride_px = out->depth_stride;
+    fo.depth_stride_px = out->depth_stride_px;
     fo.disp = out->disp;
-    fo.disp_stride_px = out->disp_stride;
+    fo.disp_stride_px = out->disp_stride_px;
     fo.labels = out->labels;
 
     // blobs：C 侧是 stereo_blob[]，C++ 侧写 BlobRecord[]；需要时先落到 workspace 再拷回去。
-    // 调用方同时要 blobs 时容量必须够，容量不够的行为与改造前一致（由 analyze 拒绝）。
     const bool want_blobs = out->blobs != nullptr && out->blob_capacity > 0;
     if (want_blobs) {
         if (!ctx->ws.frame.ensure_blobs(out->blob_capacity)) {
-            return capi::fail(ctx, "process_frame: out of memory");
+            return capi::fail(ctx, "process_frame: out of memory", STEREO_OUT_OF_MEMORY);
         }
         fo.blobs = ctx->ws.frame.blobs.data();
         fo.blob_capacity = out->blob_capacity;
@@ -66,9 +94,9 @@ int stereo_process_frame(stereo_context *ctx, const stereo_frame_input *in,
     stereo::FrameResult result;
     stereo::FrameTimings local_timing;
     stereo::FrameTimings *tp = timings != nullptr ? &local_timing : nullptr;
-    const char *error = nullptr;
+    stereo::FrameError error;
     if (!stereo::process_frame(ctx->ws, ctx->cfg, req, fo, result, tp, &error)) {
-        return capi::fail(ctx, error != nullptr ? error : "process_frame: failed");
+        return capi::fail(ctx, error.message, map_status(error.status));
     }
 
     // ---- C++ → POD ----
@@ -96,7 +124,7 @@ int stereo_process_frame(stereo_context *ctx, const stereo_frame_input *in,
         timings->total = local_timing.total;
     }
     ctx->err[0] = '\0';
-    return 0;
+    return STEREO_OK;
 }
 
 } /* extern "C" */

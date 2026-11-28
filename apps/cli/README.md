@@ -54,18 +54,16 @@ min_z max_z              深度范围
 
 ## 对阶段 4（API 约定统一）的输入
 
-写这个前端时实际被卡到的地方，按严重程度排：
+写这个前端时实际被卡到的地方（✅ = 已在 API 2.00 解决）：
 
-1. **stride 单位不一致**：图像是**字节**，深度/视差是**像素**；字段名没有单位后缀，
-   第一次接的人一定会写错一次。建议 `*_stride_bytes` / `*_stride_px`。
-2. **失败只有一个 `-1`**：要拿原因必须持有 `ctx` 再调 `stereo_last_error`；
-   无状态函数（矫正/导出）连错误串都没有。建议 `stereo_status` + `stereo_status_string`。
-3. **"有效样本不足"用返回码 1 表示**（`stereo_sample_depth`），和"参数非法 -1"混在
-   同一个返回值里。建议把它做成输出参数（例如 `has_value`），错误码只表示失败。
-4. **`in.config == NULL` 会把 ctx 配置重置成默认值**（文档里写了，但仍然反直觉；
-   第一次跑 CLI 时不传 config 就踩到）。建议"NULL = 保持当前配置"。
-5. **`stereo_frame_output` 的缓冲全要调用方按 `work_width × height` 预分配**，
-   没有"先问需要多大"的入口（点云有 `_capacity`，深度没有）。
-6. **内参必须自己从标定文件搬进 `stereo_rectify_input`**（9 + 3 个数），
-   没有 `stereo_rectify_input_from_*` 这类构造入口；Qt/CLI 前端都要各抄一遍。
-7. `stereo_config.threads` 字段存在但实现恒为单线程——建议删掉或明确标注保留。
+1. ✅ **stride 单位不一致** → 现在带单位后缀：图像 `stride_bytes`，深度/视差 `*_stride_px`。
+2. ✅ **失败只有一个 `-1`** → 所有可能失败的函数返回 `stereo_status`，
+   通用文本用 `stereo_status_string()`（有 ctx 时仍有 `stereo_last_error()` 的具体串）。
+3. ✅ **"有效样本不足"占返回码** → `stereo_sample_depth` 改为无状态，
+   正常/不足由 `out_has_value` 表达，返回码只表示调用是否成功。
+4. ❌ **`in.config == NULL` 会把 ctx 配置重置成默认值**：保持原行为（改它会变语义），
+   调用方显式传 config 即可。
+5. ❌ **深度/视差缓冲要按 `work_width × height` 预分配**，没有"先问需要多大"的入口
+   （点云有 `_capacity`）。仍待定。
+6. ❌ **内参要自己搬进 `stereo_rectify_input`**（9 + 3 个数），没有构造辅助。仍待定。
+7. ❌ `stereo_config.threads` 存在但实现恒为单线程——仍待定。

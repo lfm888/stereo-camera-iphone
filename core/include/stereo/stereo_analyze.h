@@ -51,17 +51,20 @@ typedef struct stereo_analysis {
  * 网格尺寸（= width/step × height/step，step = max(1, width/160)）。
  * 调用方据此准备 labels 缓冲（grid_width * grid_height 字节）。
  */
-int stereo_analyze_grid(int width, int height, int *grid_width, int *grid_height);
+stereo_status stereo_analyze_grid(int width, int height, int *grid_width, int *grid_height);
 
 /**
  * 在归一化矩形里抽样取 q 分位数（准星读数 / 点选测距）。
  *
- * 返回：0 成功；1 有效样本不足（< 6，UI 显示 "—"）；-1 参数非法。
- * 只收 >0 的像素。
+ * 2.00 起：无状态（不需要 ctx）。"有效样本不足"是**正常结果**，不占返回码：
+ *   * 返回 STEREO_OK = 调用成功；`*out_has_value` 表示样本够不够（< 6 个则 0，
+ *     UI 显示 "—"，此时 `*out_value` 不可用）；
+ *   * 只有参数非法才返回 STEREO_INVALID_ARGUMENT。
+ * `out_has_value` 可以为 NULL（调用方不关心时）。
  */
-int stereo_sample_depth(stereo_context *ctx, const float *depth, int depth_stride, int width,
-                        int height, float x0, float y0, float x1, float y1, float q,
-                        float *out_value);
+stereo_status stereo_sample_depth(const float *depth, int depth_stride_px, int width, int height,
+                                  float x0, float y0, float x1, float y1, float q,
+                                  float *out_value, int *out_has_value);
 
 /**
  * 连通域分析：降采样成网格 → 4 邻域连通域 → 保留最大的 max_blobs 个。
@@ -69,12 +72,12 @@ int stereo_sample_depth(stereo_context *ctx, const float *depth, int depth_strid
  * - center_rect 是准星矩形的归一化 {x0,y0,x1,y1}，center_q 是分位数（0.5 = 中位数），
  *   传 NULL 就不算 center。
  * - blobs 最多写 blobs_capacity 个；labels 写 grid_width*grid_height 字节，可为 NULL。
- * - 返回：0 成功；-1 参数/缓冲非法。
+ * - 有状态（scratch 挂在 ctx 上；同一个 ctx 不要并发调用）。
  */
-int stereo_analyze(stereo_context *ctx, const float *depth, int depth_stride, int width, int height,
-                   const stereo_analyze_params *params, const float center_rect[4],
-                   float center_q, stereo_blob *blobs, int blobs_capacity, unsigned char *labels,
-                   stereo_analysis *out);
+stereo_status stereo_analyze(stereo_context *ctx, const float *depth, int depth_stride_px,
+                             int width, int height, const stereo_analyze_params *params,
+                             const float center_rect[4], float center_q, stereo_blob *blobs,
+                             int blobs_capacity, unsigned char *labels, stereo_analysis *out);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
                 rc = stereo_configure(ctx, &cfg);
                 if (rc == 0) rc = stereo_match(ctx, &li, &ri, 1, disp_c.data(), 0);
                 if (rc == 0) {
-                    rc = stereo_disparity_to_depth(ctx, disp_c.data(), 0, W, H, fB, minZ, maxZ,
+                    rc = stereo_disparity_to_depth(disp_c.data(), 0, W, H, fB, minZ, maxZ,
                                                    depth_c.data(), 0);
                 }
             }

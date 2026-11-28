@@ -42,7 +42,8 @@ final class StereoEngine: @unchecked Sendable {
     private let calibrator: StereoCalibrator
     private let systemDepth: SystemDepthProcessor
     private let cppMatcher: CppSGMMatcher?
-    private let cppDepth: CppDepthProcessor?
+    /// 深度阶段：2.00 起无状态（不持有 context）。
+    private let cppDepth = CppDepthProcessor()
 
     /// C++ 核心上下文：CPU 匹配、视差→深度、深度回转、点选测距、连通域分析共用它。
     /// 不是 lazy —— 即使走 Metal 路径，准星读数与面块分析也要用它。
@@ -77,7 +78,6 @@ final class StereoEngine: @unchecked Sendable {
         systemDepth = SystemDepthProcessor(context: ctx, resources: res)
         core = c
         cppMatcher = c.map { CppSGMMatcher(core: $0) }
-        cppDepth = c.map { CppDepthProcessor(core: $0) }
     }
 
     /// 相机会话建好后由 `CameraSessionController.onDevices` 调用。
@@ -127,7 +127,7 @@ final class StereoEngine: @unchecked Sendable {
     /// depthMs 含「临时缓冲分配 + toDepth + unrectify」。
     private func processCppHybrid(_ wide: CMSampleBuffer, _ ultra: CMSampleBuffer,
                                   _ s: PipelineSettings) -> StereoFrame? {
-        guard let matcher = cppMatcher, let depth = cppDepth else { return nil }
+        guard let matcher = cppMatcher else { return nil }
         // 参数不合法时先失败，不浪费一块 pixel buffer（与改造前一致）。
         guard matcher.configure(s) else { return nil }
         guard let p = prepare(wide, ultra, s) else { return nil }
@@ -154,7 +154,7 @@ final class StereoEngine: @unchecked Sendable {
 
         // ---- 3) 视差 → 深度 → 回转：全部在 C++ ----
         let depthT0 = CACurrentMediaTime()
-        let ok = depth.makeDepth(disparity: image.disparity, disparityStride: image.width,
+        let ok = cppDepth.makeDepth(disparity: image.disparity, disparityStride: image.width,
                                  width: image.width, height: image.height,
                                  geometry: p.geometry, settings: s, target: p.slot.target)
         let depthMs = (CACurrentMediaTime() - depthT0) * 1000

@@ -98,6 +98,9 @@ typedef NS_ENUM(NSInteger, SVImageFormat) {
 /// fB 的单位是「像素·米」（= K.fx * baseline_m），所以输出 Z 是米。
 /// disp/depth 的行跨度以**像素**为单位；depth 可以直接指向
 /// `MTLBuffer` 背后的共享内存（按字节跨度换算），不需要额外拷贝。
+///
+/// API 2.00 起无状态（core 的 `stereo_disparity_to_depth` 不再需要 ctx）；
+/// 要连回转一起做，用 `+processDisparity:...`（一次调用、与 process_frame 同一条实现）。
 - (BOOL)depthFromDisparity:(const float *)disp
                 dispStride:(NSInteger)dispStride
                      width:(NSInteger)width
@@ -107,6 +110,23 @@ typedef NS_ENUM(NSInteger, SVImageFormat) {
                       maxZ:(float)maxZ
                      depth:(float *)depth
                depthStride:(NSInteger)depthStride;
+
+/// 视差 → 深度 → 回转（第 4 步的全部）：替代 `depthFromDisparity` + `unrectifyDepth`
+/// 两次调用，与 core 的 `stereo_process_disparity` 对应。无状态，所以是类方法。
+///
+/// `depthRectScratch` 必填（width*height 个 float），由调用方持有：实时路径里不应该
+/// 由库隐式分配。`depth` 可以直接指向共享 MTLBuffer（跨度以像素传）。
++ (BOOL)processDisparity:(const float *)disp
+              dispStride:(NSInteger)dispStride
+                   width:(NSInteger)width
+                  height:(NSInteger)height
+                      fB:(float)fB
+                    minZ:(float)minZ
+                    maxZ:(float)maxZ
+               transform:(simd_float3x3)transform
+                   depth:(float *)depth
+             depthStride:(NSInteger)depthStride
+         depthRectScratch:(float *)depthRectScratch;
 
 /// 深度图回转：把**矫正后**坐标系的深度映回**宽相机**坐标系。
 ///
@@ -148,14 +168,19 @@ typedef NS_ENUM(NSInteger, SVImageFormat) {
 // 深度图查询与分析（准星读数 / 点选测距 / 3D segmentation）
 // ---------------------------------------------------------------------------
 
-/// 在归一化矩形里取 q 分位数。返回 NO 表示有效深度不足（UI 应显示 "—"）。
-- (BOOL)sampleDepth:(const float *)depth
+/// 在归一化矩形里取 q 分位数。
+///
+/// API 2.00 起无状态（不需要 context），所以是**类方法**：
+/// 返回 YES = 调用成功；`hasValue` 表示有效样本够不够（0 → UI 显示 "—"）。
+/// 参数非法时返回 NO。
++ (BOOL)sampleDepth:(const float *)depth
              stride:(NSInteger)stride
               width:(NSInteger)width
              height:(NSInteger)height
                rect:(simd_float4)rect
                   q:(float)q
-              value:(float *)value;
+              value:(float *)value
+           hasValue:(int *)hasValue;
 
 /// 自动标定：候选序列 / 细化 / 比较在 C++（core/src/calibrate.cpp），
 /// 每一次打分回到 `score` —— iOS 上就是 Metal 的 rectify + census + cost。

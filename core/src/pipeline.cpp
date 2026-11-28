@@ -1,13 +1,13 @@
-// pipeline.cpp — 第 2..5 步 C++ 组合（从 src/stereo_c_api.cpp 的 stereo_process_frame 搬来）
+// pipeline.cpp — 第 2..5 步 C++ 组合（从 stereo_process_frame 搬来）
 //
 // 搬家原则（structure_v3_plan.md §4.3）：**只改位置，不改顺序与数值**。
 //   * 组合顺序：几何 → 重采样×2 → 匹配 → 视差→深度 → 回转 →（可选）连通域分析；
 //   * 缓冲复用：全部走 `Workspace`，尺寸不变不重新分配；
-//   * 失败顺序与错误串：与 C 版本逐条一致（C 门面直接把它写进 last_error）；
+//   * 失败顺序与错误串：与 C 版本逐条一致（C 门面写进 last_error）；
 //   * 计时点：与改造前同一位置（rectify / match / depth / unrectify / analyze / total）。
 //
-// C 门面（capi/pipeline.cpp）只负责：校验入参 → 把 POD 换乘成 FrameRequest/FrameOutput →
-// 调用这里 → 把结果换乘回 POD。边界层不再有像素循环。
+// 2.00：第 4 步收成 process_disparity（一次入口、两步实现），process_frame 也走它，
+// 于是 iOS 的 CPU 混合路径与 CLI/Qt 共用同一段代码。
 
 #include "stereo/pipeline.hpp"
 
@@ -26,27 +26,59 @@ inline double ms_since(PfClock::time_point t0) {
     return std::chrono::duration<double, std::milli>(PfClock::now() - t0).count();
 }
 
+inline void set_error(FrameError* error, FrameStatus status, const char* message) {
+    if (error == nullptr) return;
+    error->status = status;
+    error->message = message;
+}
+
 }  // namespace
+
+bool process_disparity(const float* disp, int disp_stride_px, int width, int height, float fB,
+                       float min_z, float max_z, const Mat3& m_up, float* depth,
+                       int depth_stride_px, float* depth_rect_scratch, double* depth_ms,
+                       double* unrectify_ms) {
+    if (disp == nullptr || depth == nullptr || depth_rect_scratch == nullptr) return false;
+    if (width <= 0 || height <= 0) return false;
+    if (disp_stride_px <= 0) disp_stride_px = width;
+    if (depth_stride_px <= 0) depth_stride_px = width;
+
+    const PfClock::time_point t_depth = PfClock::now();
+    to_depth(disp, disp_stride_px, width, height, fB, min_z, max_z, depth_rect_scratch, width);
+    if (depth_ms != nullptr) *depth_ms = ms_since(t_depth);
+
+    const PfClock::time_point t_unrect = PfClock::now();
+    const bool ok = unrectify_depth(depth_rect_scratch, width, height, width, m_up, depth,
+                                    width, height, depth_stride_px);
+    if (unrectify_ms != nullptr) *unrectify_ms = ms_since(t_unrect);
+    return ok;
+}
 
 bool process_frame(Workspace& ws, stereo_config& cfg, const FrameRequest& req,
                    const FrameOutput& out, FrameResult& result,
-                   FrameTimings* timings, const char** error) {
-    auto fail = [error](const char* msg) {
-        if (error != nullptr) *error = msg;
+                   FrameTimings* timings, FrameError* error) {
+    auto fail = [error](FrameStatus status, const char* msg) {
+        set_error(error, status, msg);
         return false;
     };
 
     const int W = req.geometry.work_width;
     const int H = req.geometry.work_height;
-    if (W <= 0 || H <= 0) return fail("process_frame: bad work size");
+    if (W <= 0 || H <= 0) {
+        return fail(FrameStatus::invalid_argument, "process_frame: bad work size");
+    }
 
     const PfClock::time_point t_all = PfClock::now();
 
     // ---- 第 2 步的几何 ----
     RectifyOutput g;
-    if (!rectify_geometry(req.geometry, &g)) return fail("process_frame: bad geometry");
+    if (!rectify_geometry(req.geometry, &g)) {
+        return fail(FrameStatus::invalid_argument, "process_frame: bad geometry");
+    }
 
-    if (!ws.frame.ensure(W, H)) return fail("process_frame: out of memory");
+    if (!ws.frame.ensure(W, H)) {
+        return fail(FrameStatus::out_of_memory, "process_frame: out of memory");
+    }
 
     // 匹配参数：与当前配置相同就跳过（否则每帧都会重分配缓冲区）。
     // 与改造前的 stereo_configure 一样：只有"确实不同"时才校验并应用。
@@ -57,8 +89,12 @@ bool process_frame(Workspace& ws, stereo_config& cfg, const FrameRequest& req,
         config_default(want);
     }
     if (std::memcmp(&want, &cfg, sizeof want) != 0) {
-        if (want.max_disp < 4 || want.max_disp > 96) return fail("process_frame: bad config");
-        if (want.p1 < 0 || want.p2 < 0) return fail("process_frame: bad config");
+        if (want.max_disp < 4 || want.max_disp > 96) {
+            return fail(FrameStatus::invalid_argument, "process_frame: bad config");
+        }
+        if (want.p1 < 0 || want.p2 < 0) {
+            return fail(FrameStatus::invalid_argument, "process_frame: bad config");
+        }
         cfg = want;
         ws.match.invalidate();
     }
@@ -75,10 +111,11 @@ bool process_frame(Workspace& ws, stereo_config& cfg, const FrameRequest& req,
     const ImageView* right = &req.right;
     if (left->format != kFormatBGRA8 || right->format != kFormatBGRA8) {
         if (left->width != right->width || left->height != right->height) {
-            return fail("process_frame: left/right size mismatch");
+            return fail(FrameStatus::invalid_argument,
+                        "process_frame: left/right size mismatch");
         }
         if (!ws.frame.ensure_input(left->width, left->height)) {
-            return fail("process_frame: out of memory");
+            return fail(FrameStatus::out_of_memory, "process_frame: out of memory");
         }
         sl = *left;
         sr = *right;
@@ -89,10 +126,12 @@ bool process_frame(Workspace& ws, stereo_config& cfg, const FrameRequest& req,
         sr.stride = right->width * 4;
         sr.format = kFormatBGRA8;
         if (!to_bgra8(*left, ws.frame.in_l.data())) {
-            return fail("process_frame: unsupported left format");
+            return fail(FrameStatus::unsupported_format,
+                        "process_frame: unsupported left format");
         }
         if (!to_bgra8(*right, ws.frame.in_r.data())) {
-            return fail("process_frame: unsupported right format");
+            return fail(FrameStatus::unsupported_format,
+                        "process_frame: unsupported right format");
         }
         left = &sl;
         right = &sr;
@@ -108,10 +147,10 @@ bool process_frame(Workspace& ws, stereo_config& cfg, const FrameRequest& req,
     rr.data = ws.frame.rect_r.data();
 
     if (!rectify_image(*left, g.to_wide_image, rl)) {
-        return fail("process_frame: rectify left failed");
+        return fail(FrameStatus::internal_error, "process_frame: rectify left failed");
     }
     if (!rectify_image(*right, g.to_ultra_image, rr)) {
-        return fail("process_frame: rectify right failed");
+        return fail(FrameStatus::internal_error, "process_frame: rectify right failed");
     }
     if (timings != nullptr) timings->rectify = ms_since(t_rect);
 
@@ -119,13 +158,15 @@ bool process_frame(Workspace& ws, stereo_config& cfg, const FrameRequest& req,
     const PfClock::time_point t_match = PfClock::now();
 
     const int D = cfg.max_disp;
-    if (!ws.match.ensure(W, H, D)) return fail("process_frame: out of memory");
+    if (!ws.match.ensure(W, H, D)) {
+        return fail(FrameStatus::out_of_memory, "process_frame: out of memory");
+    }
 
     // 只读视图（to_luma 只需要读）：MutableImageView 与 ImageView 是不同类型，显式构造。
     const ImageView rlv{rl.data, rl.width, rl.height, rl.stride, rl.format};
     const ImageView rrv{rr.data, rr.width, rr.height, rr.stride, rr.format};
     if (!to_luma(rlv, ws.match.luma_l.data()) || !to_luma(rrv, ws.match.luma_r.data())) {
-        return fail("process_frame: match failed");
+        return fail(FrameStatus::unsupported_format, "process_frame: match failed");
     }
 
     SgmParams p;
@@ -141,19 +182,17 @@ bool process_frame(Workspace& ws, stereo_config& cfg, const FrameRequest& req,
                ws.frame.disp.data(), W);
     if (timings != nullptr) timings->match = ms_since(t_match);
 
-    // ---- 第 4 步：视差 → 深度（矫正后坐标系）----
-    const PfClock::time_point t_depth = PfClock::now();
-    to_depth(ws.frame.disp.data(), W, W, H, g.focal_baseline, req.min_z, req.max_z,
-             ws.frame.depth_rect.data(), W);
-    if (timings != nullptr) timings->depth = ms_since(t_depth);
-
-    // ---- 第 4 步收尾：回转成宽相机坐标系 ----
-    const PfClock::time_point t_unrect = PfClock::now();
-    if (!unrectify_depth(ws.frame.depth_rect.data(), W, H, W, g.to_rect_image,
-                         out.depth, W, H, out.depth_stride_px)) {
-        return fail("process_frame: unrectify failed");
+    // ---- 第 4 步：视差 → 深度 → 回转（process_disparity：与 iOS 的 CPU 路径同一入口）----
+    double depth_ms = 0.0, unrectify_ms = 0.0;
+    if (!process_disparity(ws.frame.disp.data(), W, W, H, g.focal_baseline, req.min_z, req.max_z,
+                           g.to_rect_image, out.depth, out.depth_stride_px,
+                           ws.frame.depth_rect.data(), &depth_ms, &unrectify_ms)) {
+        return fail(FrameStatus::internal_error, "process_frame: unrectify failed");
     }
-    if (timings != nullptr) timings->unrectify = ms_since(t_unrect);
+    if (timings != nullptr) {
+        timings->depth = depth_ms;
+        timings->unrectify = unrectify_ms;
+    }
 
     // ---- 视差输出（可选）----
     if (out.disp != nullptr) {
@@ -182,7 +221,7 @@ bool process_frame(Workspace& ws, stereo_config& cfg, const FrameRequest& req,
         int capacity = out.blob_capacity;
         if (blobs == nullptr || capacity <= 0) {
             if (!ws.frame.ensure_blobs(ap.max_blobs)) {
-                return fail("process_frame: out of memory");
+                return fail(FrameStatus::out_of_memory, "process_frame: out of memory");
             }
             blobs = ws.frame.blobs.data();
             capacity = static_cast<int>(ws.frame.blobs.size());
@@ -190,7 +229,9 @@ bool process_frame(Workspace& ws, stereo_config& cfg, const FrameRequest& req,
 
         int gw = 0, gh = 0;
         analyze_grid_size(W, H, &gw, &gh);
-        if (!ws.analyze.ensure(gw, gh)) return fail("process_frame: out of memory");
+        if (!ws.analyze.ensure(gw, gh)) {
+            return fail(FrameStatus::out_of_memory, "process_frame: out of memory");
+        }
 
         const float fallback_rect[4] = {0.0f, 0.0f, 1.0f, 1.0f};
         const float* center_rect = req.center_rect != nullptr ? req.center_rect : fallback_rect;
@@ -198,7 +239,7 @@ bool process_frame(Workspace& ws, stereo_config& cfg, const FrameRequest& req,
         AnalyzeScratch scratch = ws.analyze.scratch();
         if (!analyze_depth(out.depth, depth_stride, W, H, ap, center_rect, req.center_q,
                            blobs, capacity, out.labels, &scratch, &result.analysis)) {
-            return fail("process_frame: analyze failed");
+            return fail(FrameStatus::internal_error, "process_frame: analyze failed");
         }
         if (timings != nullptr) timings->analyze = ms_since(t_analyze);
     } else {

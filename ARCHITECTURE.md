@@ -34,24 +34,29 @@ Shaders.metal                 GPU kernel（iOS 的快路径）
 
 ## 1. `core/` — C++ 算法
 
-### 1.1 对外契约：`include/stereo/stereo_c_api.h`（总头）+ 9 个领域子头（版本 150）
+### 1.1 对外契约：`include/stereo/stereo_c_api.h`（总头）+ 9 个领域子头（版本 200）
 
-**24 个导出符号**（`stereo_*`）+ POD 结构体。按领域拆在 9 个**自包含**子头里，
+**27 个导出符号**（`stereo_*`）+ POD 结构体。按领域拆在 9 个**自包含**子头里，
 总头只 `#include` 它们（旧的 include 路径不变）。每个子头有自己的 `extern "C"` 与
 include guard；CMake 为每个头生成一个只 include 它的 `.c`（`stereo_header_selfcheck`），
 漏一个依赖就编不过。符号面另由 `tools/check_api_surface.py` + `core/tests/api_surface.txt` 锁定。
 
+**2.00 的约定**（破坏性，已一次性切换）：所有可能失败的函数返回 `stereo_status`
+（0 = OK）；"有效样本不足"这类正常结果走输出参数；stride 带单位后缀
+（`_bytes` / `_px`）；`stereo_sample_depth` / `stereo_disparity_to_depth` 去掉 ctx；
+第 4 步收成 `stereo_process_disparity`（`process_frame` 内部也走它）。
+
 | 子头 | 内容 |
 |---|---|
-| `stereo_types.h` | 版本宏、`stereo_format`、`stereo_image`、`stereo_intrinsics` |
+| `stereo_types.h` | 版本宏、`stereo_status` 返回码 + `stereo_status_string` + `stereo_api_version()`、`stereo_format`、`stereo_image`（`stride_bytes`）、`stereo_intrinsics` |
 | `stereo_context.h` | 不透明句柄、`stereo_config`、生命周期、`stereo_last_error` |
 | `stereo_match.h` | `stereo_match`（Census + SGM 4 路径）、`stereo_disparity_to_depth` |
 | `stereo_rectify.h` | `stereo_rectify_geometry` / `_image` / `stereo_unrectify_depth` |
-| `stereo_analyze.h` | `stereo_analyze_grid` / `stereo_sample_depth` / `stereo_analyze` |
+| `stereo_analyze.h` | `stereo_analyze_grid` / `stereo_sample_depth`（无状态 + `has_value` 输出）/ `stereo_analyze` |
 | `stereo_export.h` | `stereo_point_cloud(_capacity)` / `_depth_filter` / `_depth_to_u16_mm` / `_copy_depth` |
 | `stereo_calibrate.h` | `stereo_calibrate`（CPU 打分）/ `stereo_calibrate_search`（平台回调） |
 | `stereo_params.h` | `stereo_param_count` / `_table` / `_find`（参数表唯一真源，见 §1.3） |
-| `stereo_pipeline.h` | `stereo_process_frame`（第 2..5 步；iOS 不走它，见 FAQ Q18） |
+| `stereo_pipeline.h` | `stereo_process_disparity`（视差→深度→回转，所有前端共用）/ `stereo_process_frame`（第 2..5 步；iOS 不走它，见 FAQ Q18） |
 
 ### 1.2 实现
 
@@ -68,7 +73,7 @@ include guard；CMake 为每个头生成一个只 include 它的 `.c`（`stereo_
 | `src/params.cpp` | 84 | **参数描述表**（11 条）+ `config_default`（C/C++ 共用） | `param_table` `param_default` `config_default` |
 | `src/workspace.cpp` | 174 | 跨帧缓冲（match / analyze / calibrate / frame），尺寸不变不重分配 | `MatchBuffers` `AnalyzeBuffers` `CalibrateBuffers` `FrameBuffers` |
 | `src/pipeline.cpp` | 217 | 第 2..5 步组合（C 与 C++ 前端共用） | `stereo::process_frame` |
-| `src/capi/*.cpp` | 496（8 个文件，最大 102） | 边界层：校验 + POD 换乘 + 错误码，**无像素循环**；`capi_internal.hpp` 是 `struct stereo_context` 的唯一定义 | 24 个导出符号 |
+| `src/capi/*.cpp` | 512（8 个文件，最大 130） | 边界层：校验 + POD 换乘 + `stereo_status`，**无像素循环**；`capi_internal.hpp` 是 `struct stereo_context` 的唯一定义 | 27 个导出符号 |
 
 ### 1.3 参数表（`params.cpp`）
 
@@ -94,7 +99,7 @@ include guard；CMake 为每个头生成一个只 include 它的 `.c`（`stereo_
 
 | 类 | 管什么 |
 |---|---|
-| `SVStereoCore` | 持有一个 `stereo_context`。方法：`configure`、`matchLeft`、`depth(fromDisparity:)`、`+unrectifyDepth`、`sampleDepth`、`analyzeDepth:into:`、`+calibrate:flip0:dy0:`（收 block 当打分回调）、`processFrame:...`（**Swift 目前不调**） |
+| `SVStereoCore` | 持有一个 `stereo_context`。方法：`configure`、`matchLeft`、`depth(fromDisparity:)`（2.00 起无状态）、`+processDisparity:...`（深度+回转一次调用，CPU 混合路径在用）、`+unrectifyDepth`、`+sampleDepth:...hasValue:`（2.00 起是类方法，所以不再需要主线程专用 context）、`analyzeDepth:into:`、`+calibrate:flip0:dy0:`（收 block 当打分回调）、`processFrame:...`（**Swift 目前不调**） |
 | `SVRectifyInput` / `SVRectification` | 第 2 步的输入输出（`+solve:`），`float[9]` ↔ `simd_float3x3` |
 | `SVAnalysis` / `SVBlobRecord` | 面块与标签图的**借用指针**容器（避免每帧分配） |
 | `SVCalibration` | 自动标定结果（flipped / yOffset / score） |
@@ -336,7 +341,7 @@ BGRA 双帧 ─GPU rectify→ 640×360 左右图 ─Metal SGM→ 视差 ─toDep
 | 3 | 块匹配后端 `Matcher.block` | `Shaders.metal` 的 `match` kernel + `Engine/Matching/MetalBlockMatcher.swift`；**同时被标定的 GPU 打分复用** | 后端还用得上吗？砍它要先把标定打分换成别的代价函数 |
 | 4 | 两条系统深度分支 | `DepthSource.apple`/`.lidar` + `Engine/Depth/SystemDepthProcessor.swift`（~55 行）+ `CameraSessionController.makeDepth`（~45 行） | 如果只用自研双目，整条可删 |
 | 5 | `CameraCalibrationReader.calibration(of:)` / `.extrinsics(from:to:)` | 只在 `rig()` 里各用一次；每帧真正用的是 `intrinsics(of:fov:size:)` | 三者能否合一 |
-| 6 | 双份"视差后"实现 | `stereo_process_frame` 内部调 `to_depth`/`unrectify`，iOS 的 `CppDepthProcessor` 调 `depthFromDisparity`+`unrectifyDepth`（同一对函数、两次调用） | 可合并成 `stereo_process_disparity`（省一次 malloc + 一次跨桥）；FAQ Q18 有分析 |
+| 6 | ~~双份"视差后"实现~~ | **2.00 已合并**：`stereo_process_disparity` 一次做完 to_depth + unrectify，`process_frame` 与 iOS 的 `CppDepthProcessor` 都走它（少一次跨桥调用，数值不变） | 已解决，无待办 |
 | 7 | `core/tests/` 2351 行 | 不是运行时代码，但它是"改 C++ 不出错"的唯一保障（**iOS 侧没有任何测试**） | 删测试 = 放弃回归保护 |
 | 8 | `MetalSceneRenderer` 的矩阵工具 | `perspective`/`translate`/`rotateX/Y/Z`（~25 行）只服务点云视图 | 值得留 |
 | 9 | `tools/` 下的脚本 | `sgm_ref.py`+`gen_golden.py` 是金标准的来源（有用）；`viewer.html` / `make_demo_export.py` 用途不明 | 后两个确认没人用可删 |

@@ -41,7 +41,7 @@ void stereo_destroy(stereo_context *ctx);
 void stereo_config_default(stereo_config *cfg);
 
 /** 应用配置。内部的临时缓冲区在第一次 stereo_match 时按尺寸分配。 */
-int stereo_configure(stereo_context *ctx, const stereo_config *cfg);
+stereo_status stereo_configure(stereo_context *ctx, const stereo_config *cfg);
 
 /** 最近一次失败的原因（永远返回非 NULL 的字符串，没有错误时是空串）。 */
 const char *stereo_last_error(const stereo_context *ctx);

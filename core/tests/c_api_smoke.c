@@ -81,7 +81,7 @@ int main(void) {
     check("stereo_match 有有效输出", valid > 0, buf);
 
     check("to_depth 成功",
-          stereo_disparity_to_depth(ctx, disp, W, W, H, 0.66f, 0.12f, 3.0f, depth, W) == 0, "");
+          stereo_disparity_to_depth(disp, W, W, H, 0.66f, 0.12f, 3.0f, depth, W) == 0, "");
     int dvalid = 0;
     for (int i = 0; i < W * H; ++i) if (depth[i] > 0.0f) ++dvalid;
     snprintf(buf, sizeof(buf), "有效深度 %d/%d", dvalid, W * H);
@@ -116,7 +116,7 @@ int main(void) {
         int same = 1;
         memset(flat, 128, (size_t)CW * CH * 3);
         memset(out, 0, (size_t)CW * CH * 3);
-        src.data = flat; src.width = CW; src.height = CH; src.stride = CW * 3;
+        src.data = flat; src.width = CW; src.height = CH; src.stride_bytes = CW * 3;
         src.format = STEREO_FORMAT_RGB8;
         dst = src;
         dst.data = out;
@@ -202,9 +202,9 @@ int main(void) {
 
         memset(&fout, 0, sizeof(fout));
         fout.disp = fdisp;
-        fout.disp_stride = W;
+        fout.disp_stride_px = W;
         fout.depth = fdepth;
-        fout.depth_stride = W;
+        fout.depth_stride_px = W;
         fout.blobs = fblobs;
         fout.blob_capacity = 8;
         fout.labels = flabels;

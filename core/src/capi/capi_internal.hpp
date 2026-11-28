@@ -6,7 +6,7 @@
 //   3. 不变量：其它 .cpp 只能通过这里访问 context。
 //
 // 约束：本文件不出现像素循环、不出现算法。`capi/*.cpp` 只做
-// "校验参数 → 换乘类型 → 调 stereo:: → 把失败转成返回码与错误串"。
+// "校验参数 → 换乘类型 → 调 stereo:: → 把失败转成 stereo_status 与错误串"。
 
 #pragma once
 
@@ -27,16 +27,17 @@ struct stereo_context {
 
 namespace capi {
 
-/// 写 last_error 并返回失败码（C API 的失败返回统一是 -1；0/1 的例外见 sample_depth）。
-inline int fail(stereo_context* ctx, const char* msg) {
+/// 写 last_error 并返回失败码。默认是"参数非法"，需要更具体的码时显式传。
+inline stereo_status fail(stereo_context* ctx, const char* msg,
+                          stereo_status code = STEREO_INVALID_ARGUMENT) {
     if (ctx != nullptr) std::snprintf(ctx->err, sizeof(ctx->err), "%s", msg);
-    return -1;
+    return code;
 }
 
 /// 只校验"指针和尺寸看起来能用"（不校验格式/跨度）。
 inline bool valid_image(const stereo_image* img) {
     return img != nullptr && img->data != nullptr && img->width > 0 && img->height > 0 &&
-           img->stride > 0;
+           img->stride_bytes > 0;
 }
 
 /// 校验"格式认识、跨度足够"——匹配用（要按格式转亮度）。
@@ -44,7 +45,7 @@ inline bool usable(const stereo_image* img) {
     if (img == nullptr) return false;
     const int bpp = stereo::format_channels(img->format);
     return img->data != nullptr && img->width > 0 && img->height > 0 && bpp > 0 &&
-           img->stride >= img->width * bpp;
+           img->stride_bytes >= img->width * bpp;
 }
 
 inline stereo::Intrinsics to_intrinsics(const stereo_intrinsics& k) {

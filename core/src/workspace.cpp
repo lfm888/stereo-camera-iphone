@@ -156,7 +156,7 @@ ImageView view_of(const stereo_image& img) {
     v.data = img.data;
     v.width = img.width;
     v.height = img.height;
-    v.stride = img.stride;
+    v.stride = img.stride_bytes;
     v.format = img.format;
     return v;
 }
@@ -166,7 +166,7 @@ MutableImageView mutable_view_of(stereo_image& img) {
     v.data = const_cast<uint8_t*>(img.data);
     v.width = img.width;
     v.height = img.height;
-    v.stride = img.stride;
+    v.stride = img.stride_bytes;
     v.format = img.format;
     return v;
 }

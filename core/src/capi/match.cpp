@@ -7,16 +7,16 @@
 
 extern "C" {
 
-int stereo_match(stereo_context *ctx,
-                 const stereo_image *left,
-                 const stereo_image *right,
-                 int dir,
-                 float *disp,
-                 int disp_stride) {
-    if (ctx == nullptr) return -1;
+stereo_status stereo_match(stereo_context *ctx,
+                           const stereo_image *left,
+                           const stereo_image *right,
+                           int dir,
+                           float *disp,
+                           int disp_stride_px) {
+    if (ctx == nullptr) return STEREO_INVALID_ARGUMENT;
     if (disp == nullptr) return capi::fail(ctx, "stereo_match: disp is NULL");
     if (!capi::usable(left) || !capi::usable(right)) {
-        return capi::fail(ctx, "stereo_match: bad left/right image");
+        return capi::fail(ctx, "stereo_match: bad left/right image", STEREO_UNSUPPORTED_FORMAT);
     }
     if (left->width != right->width || left->height != right->height) {
         return capi::fail(ctx, "stereo_match: left/right size mismatch");
@@ -24,14 +24,16 @@ int stereo_match(stereo_context *ctx,
     if (dir != 1 && dir != -1) return capi::fail(ctx, "stereo_match: dir must be +1 or -1");
 
     const int W = left->width, H = left->height, D = ctx->cfg.max_disp;
-    if (disp_stride <= 0) disp_stride = W;
-    if (!ctx->ws.match.ensure(W, H, D)) return capi::fail(ctx, "stereo_match: out of memory");
+    if (disp_stride_px <= 0) disp_stride_px = W;
+    if (!ctx->ws.match.ensure(W, H, D)) {
+        return capi::fail(ctx, "stereo_match: out of memory", STEREO_OUT_OF_MEMORY);
+    }
 
     if (!stereo::to_luma(stereo::view_of(*left), ctx->ws.match.luma_l.data())) {
-        return capi::fail(ctx, "stereo_match: bad left format");
+        return capi::fail(ctx, "stereo_match: bad left format", STEREO_UNSUPPORTED_FORMAT);
     }
     if (!stereo::to_luma(stereo::view_of(*right), ctx->ws.match.luma_r.data())) {
-        return capi::fail(ctx, "stereo_match: bad right format");
+        return capi::fail(ctx, "stereo_match: bad right format", STEREO_UNSUPPORTED_FORMAT);
     }
 
     stereo::SgmParams p;
@@ -45,30 +47,29 @@ int stereo_match(stereo_context *ctx,
     p.lrCheck = ctx->cfg.lr_check;
 
     stereo::match_luma(ctx->ws.match.luma_l.data(), ctx->ws.match.luma_r.data(), p,
-                       ctx->ws.match.scratch(), disp, disp_stride);
+                       ctx->ws.match.scratch(), disp, disp_stride_px);
     ctx->err[0] = '\0';
-    return 0;
+    return STEREO_OK;
 }
 
-int stereo_disparity_to_depth(stereo_context *ctx,
-                              const float *disp,
-                              int disp_stride,
-                              int width,
-                              int height,
-                              float fB,
-                              float min_z,
-                              float max_z,
-                              float *depth,
-                              int depth_stride) {
-    if (ctx == nullptr) return -1;
-    if (disp == nullptr || depth == nullptr) return capi::fail(ctx, "to_depth: NULL buffer");
-    if (width <= 0 || height <= 0) return capi::fail(ctx, "to_depth: bad size");
-    if (disp_stride <= 0) disp_stride = width;
-    if (depth_stride <= 0) depth_stride = width;
+stereo_status stereo_disparity_to_depth(const float *disp,
+                                        int disp_stride_px,
+                                        int width,
+                                        int height,
+                                        float fB,
+                                        float min_z,
+                                        float max_z,
+                                        float *depth,
+                                        int depth_stride_px) {
+    if (disp == nullptr || depth == nullptr) return STEREO_INVALID_ARGUMENT;
+    if (width <= 0 || height <= 0) return STEREO_INVALID_ARGUMENT;
+    if (disp_stride_px <= 0) disp_stride_px = width;
+    if (depth_stride_px <= 0) depth_stride_px = width;
 
-    // to_depth 支持行跨度，所以不需要搬进紧凑缓冲区。
-    stereo::to_depth(disp, disp_stride, width, height, fB, min_z, max_z, depth, depth_stride);
-    return 0;
+    // 无状态：to_depth 支持行跨度，不需要 ctx 的缓冲或错误串。
+    stereo::to_depth(disp, disp_stride_px, width, height, fB, min_z, max_z, depth,
+                     depth_stride_px);
+    return STEREO_OK;
 }
 
 } /* extern "C" */

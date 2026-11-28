@@ -361,17 +361,18 @@ int main() {
         const bool grid_ok = stereo_analyze_grid(w, h, &cgw, &cgh) == 0 && cgw == 160 && cgh == 120;
         report("stereo_analyze_grid（320 宽 → 160 列）", grid_ok);
 
-        // 分位数：非 0 返回 = 有效样本不足
+        // 2.00：无状态；"有效样本不足"用 has_value 表达，不占返回码
         float v = 0;
-        const bool sample_ok = stereo_sample_depth(ctx, s.depth.data(), w, w, h, 0.1f, 0.1f, 0.4f,
-                                                   0.5f, 0.5f, &v) == 0;
-        report("stereo_sample_depth 成功", sample_ok && near(v, 0.50f, 1e-6f));
-        report("stereo_sample_depth 对空区域返回 1",
-               stereo_sample_depth(ctx, s.depth.data(), w, w, h, 0.0f, 0.0f, 0.01f, 0.01f, 0.5f,
-                                   &v) == 1);
-        report("stereo_sample_depth 对反向矩形返回 -1",
-               stereo_sample_depth(ctx, s.depth.data(), w, w, h, 0.5f, 0.0f, 0.4f, 1.0f, 0.5f,
-                                   &v) == -1);
+        int has = 0;
+        const bool sample_ok = stereo_sample_depth(s.depth.data(), w, w, h, 0.1f, 0.1f, 0.4f,
+                                                   0.5f, 0.5f, &v, &has) == STEREO_OK;
+        report("stereo_sample_depth 成功", sample_ok && has != 0 && near(v, 0.50f, 1e-6f));
+        report("stereo_sample_depth 对空区域：OK + has=0",
+               stereo_sample_depth(s.depth.data(), w, w, h, 0.0f, 0.0f, 0.01f, 0.01f, 0.5f, &v,
+                                   &has) == STEREO_OK && has == 0);
+        report("stereo_sample_depth 对反向矩形：INVALID_ARGUMENT",
+               stereo_sample_depth(s.depth.data(), w, w, h, 0.5f, 0.0f, 0.4f, 1.0f, 0.5f, &v,
+                                   &has) == STEREO_INVALID_ARGUMENT);
 
         // 分析：C 接口 vs C++ 接口逐字段一致
         stereo_analyze_params p;

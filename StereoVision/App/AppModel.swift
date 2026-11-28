@@ -115,10 +115,6 @@ final class AppModel {
 
     @ObservationIgnored let pipeline: FramePipeline
     @ObservationIgnored let renderer: MetalSceneRenderer
-    /// 主线程专用的 C++ context：点选测距在主线程跑，而 pipeline 的 context 在相机数据队列上跑。
-    /// 两个分开是为了不并发访问同一个 stereo_context（它不是线程安全的）。
-    @ObservationIgnored private let queryCore = SVStereoCore(maxDisparity: 64, p1: 8, p2: 96,
-                                                           uniqueness: 0.1, lrCheck: true)
     @ObservationIgnored private var orientationObservers: [NSObjectProtocol] = []
     let capture = MediaExportManager()
     @ObservationIgnored private let camera = CameraSessionController()
@@ -263,18 +259,22 @@ final class AppModel {
     }
 
     private func sampleTap() -> Float? {
-        guard let tap, let f = pipeline.store.latest, let core = queryCore else { return nil }
+        guard let tap, let f = pipeline.store.latest else { return nil }
         let p = orientation.buffer(tap)          // 屏幕坐标 -> 相机 buffer 坐标（深度图在 buffer 坐标系里）
         var v: Float = 0
-        let ok = core.sampleDepth(f.depthPointer,
-                                  stride: f.depthStride,
-                                  width: f.width,
-                                  height: f.height,
-                                  rect: SIMD4(Float(p.x - 0.012), Float(p.y - 0.02),
-                                              Float(p.x + 0.012), Float(p.y + 0.02)),
-                                  q: 0.5,
-                                  value: &v)
-        return ok ? v : nil
+        var has: Int32 = 0
+        // API 2.00：sampleDepth 是无状态类方法（不需要主线程专用 context）；
+        // 返回 true 只表示调用成功，样本够不够看 has。
+        let ok = SVStereoCore.sampleDepth(f.depthPointer,
+                                          stride: f.depthStride,
+                                          width: f.width,
+                                          height: f.height,
+                                          rect: SIMD4(Float(p.x - 0.012), Float(p.y - 0.02),
+                                                      Float(p.x + 0.012), Float(p.y + 0.02)),
+                                          q: 0.5,
+                                          value: &v,
+                                          hasValue: &has)
+        return ok && has != 0 ? v : nil
     }
 
     private func push(_ change: (inout PipelineSettings) -> Void) {

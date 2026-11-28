@@ -28,22 +28,26 @@ size_t stereo_point_cloud_capacity(int width, int height);
  *   1) out = NULL，拿到 out_bytes（精确尺寸）
  *   2) 按 out_bytes 分配，再调一次
  *
- * 返回 0 成功；非 0 失败（缓冲不够时 out_bytes 会写最坏情况的需求量）。
+ * 失败时：缓冲不够返回 STEREO_BUFFER_TOO_SMALL，`*out_bytes` 写需求量；
+ * 其余参数问题返回 STEREO_INVALID_ARGUMENT。成功返回 STEREO_OK。
  */
-int stereo_point_cloud(const float *depth, int depth_stride, int width, int height, float fx,
-                       float fy, float cx, float cy, const uint8_t *rgba, int rgba_stride,
-                       int rgba_width, int rgba_height, char *out, size_t capacity,
-                       size_t *out_bytes);
+stereo_status stereo_point_cloud(const float *depth, int depth_stride_px, int width, int height,
+                                 float fx, float fy, float cx, float cy, const uint8_t *rgba,
+                                 int rgba_stride_bytes, int rgba_width, int rgba_height, char *out,
+                                 size_t capacity, size_t *out_bytes);
 
-/** 深度裁剪：非有限值、或超出 [min_z, max_z] 的写 0。src/dst 允许不同跨度。 */
-int stereo_depth_filter(const float *src, int src_stride, float *dst, int dst_stride, int width,
-                        int height, float min_z, float max_z);
+/** 深度裁剪：非有限值、或超出 [min_z, max_z] 的写 0。src/dst 允许不同跨度（像素）。 */
+stereo_status stereo_depth_filter(const float *src, int src_stride_px, float *dst,
+                                  int dst_stride_px, int width, int height, float min_z,
+                                  float max_z);
 
-/** 深度 → 16 位毫米（导出 depth_mm.png 用），输出行跨度 = width。 */
-int stereo_depth_to_u16_mm(const float *depth, int stride, int width, int height, uint16_t *out);
+/** 深度 → 16 位毫米（导出 depth_mm.png 用），输入跨度以**像素**为单位。 */
+stereo_status stereo_depth_to_u16_mm(const float *depth, int stride_px, int width, int height,
+                                     uint16_t *out);
 
-/** 带跨度 → 紧凑的 float 拷贝。 */
-int stereo_copy_depth(const float *src, int src_stride, int width, int height, float *dst);
+/** 带跨度（像素）→ 紧凑的 float 拷贝。 */
+stereo_status stereo_copy_depth(const float *src, int src_stride_px, int width, int height,
+                                float *dst);
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -59,7 +59,7 @@ typedef struct stereo_rectify_output {
  *   * 两路图**已去畸变**（iPhone 的 constituent 相机输出满足）；
  *   * 两路同尺寸（src_width 共用）。
  */
-int stereo_rectify_geometry(const stereo_rectify_input *in, stereo_rectify_output *out);
+stereo_status stereo_rectify_geometry(const stereo_rectify_input *in, stereo_rectify_output *out);
 
 /**
  * 用单应 m 把 src 重采样到 dst。
@@ -75,7 +75,7 @@ int stereo_rectify_geometry(const stereo_rectify_input *in, stereo_rectify_outpu
  *
  * 成功返回 0。
  */
-int stereo_rectify_image(const stereo_image *src, const float m[9], stereo_image *dst);
+stereo_status stereo_rectify_image(const stereo_image *src, const float m[9], stereo_image *dst);
 
 /**
  * 深度图回转：把**矫正后**坐标系的深度映射回**宽相机**坐标系（unrectifyDepth）。
@@ -86,9 +86,9 @@ int stereo_rectify_image(const stereo_image *src, const float m[9], stereo_image
  *
  * 成功返回 0。
  */
-int stereo_unrectify_depth(const float *src, int src_stride, int src_width, int src_height,
-                           const float m[9], float *dst, int dst_stride, int dst_width,
-                           int dst_height);
+stereo_status stereo_unrectify_depth(const float *src, int src_stride_px, int src_width,
+                                     int src_height, const float m[9], float *dst,
+                                     int dst_stride_px, int dst_width, int dst_height);
 
 #ifdef __cplusplus
 } /* extern "C" */

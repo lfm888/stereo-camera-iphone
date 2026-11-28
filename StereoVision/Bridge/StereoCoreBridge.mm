@@ -93,7 +93,7 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
     cfg.uniqueness = uniqueness;
     cfg.lr_check = lrCheck ? 1 : 0;
 
-    if (stereo_configure(_ctx, &cfg) != 0) {
+    if (stereo_configure(_ctx, &cfg) != STEREO_OK) {
         _lastError = [NSString stringWithUTF8String:stereo_last_error(_ctx)];
         stereo_destroy(_ctx);
         _ctx = NULL;
@@ -166,17 +166,17 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
     li.data = left;
     li.width = (int)width;
     li.height = (int)height;
-    li.stride = (int)leftStride;
+    li.stride_bytes = (int)leftStride;
     li.format = (int)leftFormat;
 
     stereo_image ri;
     ri.data = right;
     ri.width = (int)width;
     ri.height = (int)height;
-    ri.stride = (int)rightStride;
+    ri.stride_bytes = (int)rightStride;
     ri.format = (int)rightFormat;
 
-    if (stereo_match(_ctx, &li, &ri, (int)direction, disparity, (int)width) != 0) {
+    if (stereo_match(_ctx, &li, &ri, (int)direction, disparity, (int)width) != STEREO_OK) {
         _lastError = [NSString stringWithUTF8String:stereo_last_error(_ctx)];
         return NO;
     }
@@ -196,17 +196,34 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
                       maxZ:(float)maxZ
                      depth:(float *)depth
                depthStride:(NSInteger)depthStride {
-    if (_ctx == NULL) {
-        _lastError = @"context 已经释放";
-        return NO;
-    }
-    if (stereo_disparity_to_depth(_ctx, disp, (int)dispStride, (int)width, (int)height, fB, minZ,
-                                  maxZ, depth, (int)depthStride) != 0) {
-        _lastError = [NSString stringWithUTF8String:stereo_last_error(_ctx)];
+    // 2.00：无状态（不再需要 context，也不再有 last_error）
+    const stereo_status rc = stereo_disparity_to_depth(disp, (int)dispStride, (int)width,
+                                                       (int)height, fB, minZ, maxZ, depth,
+                                                       (int)depthStride);
+    if (rc != STEREO_OK) {
+        _lastError = [NSString stringWithUTF8String:stereo_status_string(rc)];
         return NO;
     }
     _lastError = @"";
     return YES;
+}
+
++ (BOOL)processDisparity:(const float *)disp
+              dispStride:(NSInteger)dispStride
+                   width:(NSInteger)width
+                  height:(NSInteger)height
+                      fB:(float)fB
+                    minZ:(float)minZ
+                    maxZ:(float)maxZ
+               transform:(simd_float3x3)transform
+                   depth:(float *)depth
+             depthStride:(NSInteger)depthStride
+         depthRectScratch:(float *)depthRectScratch {
+    float m[9];
+    copy_to_row_major(transform, m);
+    return stereo_process_disparity(disp, (int)dispStride, (int)width, (int)height, fB, minZ,
+                                    maxZ, m, depth, (int)depthStride, depthRectScratch) ==
+           STEREO_OK;
 }
 
 + (BOOL)unrectifyDepth:(const float *)src
@@ -221,30 +238,24 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
     float m[9];
     copy_to_row_major(transform, m);
     return stereo_unrectify_depth(src, (int)srcStride, (int)width, (int)height, m, dst,
-                                  (int)dstStride, (int)dstWidth, (int)dstHeight) == 0;
+                                  (int)dstStride, (int)dstWidth, (int)dstHeight) == STEREO_OK;
 }
 
 
 
-- (BOOL)sampleDepth:(const float *)depth
++ (BOOL)sampleDepth:(const float *)depth
              stride:(NSInteger)stride
               width:(NSInteger)width
              height:(NSInteger)height
                rect:(simd_float4)rect
                   q:(float)q
-              value:(float *)value {
-    if (_ctx == NULL) {
-        _lastError = @"context 已经释放";
-        return NO;
-    }
-    // 返回 1 = "有效样本不足"（正常的 UI 状态，不算错误），所以只看 < 0。
-    const int rc = stereo_sample_depth(_ctx, depth, (int)stride, (int)width, (int)height, rect.x,
-                                       rect.y, rect.z, rect.w, q, value);
-    if (rc < 0) {
-        _lastError = [NSString stringWithUTF8String:stereo_last_error(_ctx)];
-        return NO;
-    }
-    return rc == 0;
+              value:(float *)value
+           hasValue:(int *)hasValue {
+    int has = 0;
+    const stereo_status rc = stereo_sample_depth(depth, (int)stride, (int)width, (int)height,
+                                                 rect.x, rect.y, rect.z, rect.w, q, value, &has);
+    if (hasValue != NULL) *hasValue = has;
+    return rc == STEREO_OK;
 }
 
 - (BOOL)analyzeDepth:(const float *)depth
@@ -275,7 +286,7 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
 
     // 先问网格尺寸，再准备 labels / blobs 缓冲（都放在这个方法的临时区，量很小）。
     int gw = 0, gh = 0;
-    if (stereo_analyze_grid((int)width, (int)height, &gw, &gh) != 0 || gw <= 0 || gh <= 0) {
+    if (stereo_analyze_grid((int)width, (int)height, &gw, &gh) != STEREO_OK || gw <= 0 || gh <= 0) {
         return NO;
     }
     std::vector<uint8_t> label_buf(static_cast<size_t>(gw) * static_cast<size_t>(gh));
@@ -283,7 +294,7 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
 
     stereo_analysis res{};
     if (stereo_analyze(_ctx, depth, (int)stride, (int)width, (int)height, &p, center, centerQ,
-                       c_blobs.data(), (int)maxBlobs, label_buf.data(), &res) != 0) {
+                       c_blobs.data(), (int)maxBlobs, label_buf.data(), &res) != STEREO_OK) {
         _lastError = [NSString stringWithUTF8String:stereo_last_error(_ctx)];
         return NO;
     }
@@ -342,7 +353,7 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
     in.dy = input.yOffset;
 
     stereo_rectify_output out{};
-    if (stereo_rectify_geometry(&in, &out) != 0) return nil;
+    if (stereo_rectify_geometry(&in, &out) != STEREO_OK) return nil;
 
     SVRectification *r = [[SVRectification alloc] init];
     r->_rectifiedToWide = mat3_from_row_major(out.to_wide_image);
@@ -429,7 +440,7 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
     size_t need = 0;
     if (stereo_point_cloud(depth, (int)depthStride, (int)width, (int)height, intrinsics.x,
                            intrinsics.y, intrinsics.z, intrinsics.w, rgba, (int)rgbaStride,
-                           (int)rgbaWidth, (int)rgbaHeight, nullptr, 0, &need) != 0 ||
+                           (int)rgbaWidth, (int)rgbaHeight, nullptr, 0, &need) != STEREO_OK ||
         need == 0) {
         return nil;
     }
@@ -438,7 +449,7 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
     size_t written = 0;
     if (stereo_point_cloud(depth, (int)depthStride, (int)width, (int)height, intrinsics.x,
                            intrinsics.y, intrinsics.z, intrinsics.w, rgba, (int)rgbaStride,
-                           (int)rgbaWidth, (int)rgbaHeight, buf, need, &written) != 0) {
+                           (int)rgbaWidth, (int)rgbaHeight, buf, need, &written) != STEREO_OK) {
         std::free(buf);
         return nil;
     }
@@ -450,7 +461,7 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
                      width:(NSInteger)width
                     height:(NSInteger)height
                        out:(uint16_t *)out {
-    return stereo_depth_to_u16_mm(depth, (int)stride, (int)width, (int)height, out) == 0;
+    return stereo_depth_to_u16_mm(depth, (int)stride, (int)width, (int)height, out) == STEREO_OK;
 }
 
 + (BOOL)filterDepth:(const float *)src
@@ -462,7 +473,7 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
                 minZ:(float)minZ
                 maxZ:(float)maxZ {
     return stereo_depth_filter(src, (int)srcStride, dst, (int)dstStride, (int)width, (int)height,
-                               minZ, maxZ) == 0;
+                               minZ, maxZ) == STEREO_OK;
 }
 
 + (float)meanNonNegative:(const float *)values count:(NSInteger)count {
@@ -483,7 +494,7 @@ stereo_intrinsics intrinsics_from(simd_float4 v) {
             width:(NSInteger)width
            height:(NSInteger)height
               dst:(float *)dst {
-    return stereo_copy_depth(src, (int)srcStride, (int)width, (int)height, dst) == 0;
+    return stereo_copy_depth(src, (int)srcStride, (int)width, (int)height, dst) == STEREO_OK;
 }
 
 @end
@@ -526,7 +537,7 @@ float sv_calibrate_score(void *user, int flip, float dy) {
     p.dy0 = dy0;
 
     stereo_calibrate_result r{};
-    if (stereo_calibrate_search(sv_calibrate_score, (__bridge void *)score, &p, &r) != 0) {
+    if (stereo_calibrate_search(sv_calibrate_score, (__bridge void *)score, &p, &r) != STEREO_OK) {
         return nil;
     }
     SVCalibration *out = [[SVCalibration alloc] init];
@@ -679,7 +690,7 @@ float sv_calibrate_score(void *user, int flip, float dy) {
 
     // 3) 输出缓冲：labels 的尺寸要先问网格
     int gw = 0, gh = 0;
-    if (stereo_analyze_grid((int)in.workWidth, (int)in.workHeight, &gw, &gh) != 0) return NO;
+    if (stereo_analyze_grid((int)in.workWidth, (int)in.workHeight, &gw, &gh) != STEREO_OK) return NO;
     const NSInteger cap = request.maxBlobs > 0 ? request.maxBlobs : 24;
     stereo_blob *blobs = [analysis resizeCBlobs:cap];
     unsigned char *labels = [analysis resizeLabels:(NSInteger)gw * (NSInteger)gh];
@@ -688,12 +699,12 @@ float sv_calibrate_score(void *user, int flip, float dy) {
     li.data = left;
     li.width = (int)in.sourceWidth;
     li.height = (int)(in.sourceHeight);
-    li.stride = (int)leftStride;
+    li.stride_bytes = (int)leftStride;
     li.format = (int)leftFormat;
 
     stereo_image ri = li;
     ri.data = right;
-    ri.stride = (int)rightStride;
+    ri.stride_bytes = (int)rightStride;
     ri.format = (int)rightFormat;
 
     const float center[4] = {request.centerRect.x, request.centerRect.y, request.centerRect.z,
@@ -714,15 +725,15 @@ float sv_calibrate_score(void *user, int flip, float dy) {
 
     stereo_frame_output fout{};
     fout.disp = disparity;
-    fout.disp_stride = (int)dispStride;
+    fout.disp_stride_px = (int)dispStride;
     fout.depth = depth;
-    fout.depth_stride = (int)depthStride;
+    fout.depth_stride_px = (int)depthStride;
     fout.blobs = blobs;
     fout.blob_capacity = (int)(request.maxBlobs > 0 ? request.maxBlobs : 24);
     fout.labels = labels;
 
     stereo_frame_timings ft{};
-    if (stereo_process_frame(_ctx, &fin, &fout, timings != nil ? &ft : nullptr) != 0) {
+    if (stereo_process_frame(_ctx, &fin, &fout, timings != nil ? &ft : nullptr) != STEREO_OK) {
         _lastError = [NSString stringWithUTF8String:stereo_last_error(_ctx)];
         return NO;
     }

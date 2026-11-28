@@ -44,9 +44,9 @@ typedef struct stereo_frame_input {
 /** 一次全流水线的输出。调用方按 work_width/height 准备缓冲。 */
 typedef struct stereo_frame_output {
     float *disp;            /**< 可选：视差（工作分辨率，**矫正后**坐标系），NULL = 不要 */
-    int disp_stride;        /**< 像素跨度；<= 0 表示等于 work_width */
+    int disp_stride_px;     /**< 像素跨度；<= 0 表示等于 work_width */
     float *depth;           /**< 必填：深度（工作分辨率，**宽相机**坐标系，米） */
-    int depth_stride;       /**< 像素跨度；<= 0 表示等于 work_width */
+    int depth_stride_px;    /**< 像素跨度；<= 0 表示等于 work_width */
     stereo_blob *blobs;     /**< 可选：面块数组（NULL = 不要；只要 labels 时会用内部兜底数组） */
     int blob_capacity;
     unsigned char *labels;  /**< 可选：标签图（grid_width*grid_height 字节） */
@@ -67,6 +67,26 @@ typedef struct stereo_frame_timings {
 } stereo_frame_timings;
 
 /**
+ * 视差 → 深度 → 回转（第 4 步的全部）：一个函数替代 "to_depth + unrectify" 两次调用。
+ *
+ * 所有前端（iOS 的 CPU 混合路径、CLI、未来的 Qt）共用这一段；
+ * 与 `stereo_process_frame` 内部走同一份实现，所以结果逐位一致。
+ *
+ * - `disp`：**已矫正**坐标系里的视差（width × height，跨度像素）；
+ * - `fB`：fx * baseline(米)，来自 stereo_rectify_output.focal_baseline；
+ * - `m_up`：stereo_rectify_output.to_rect_image（宽相机像素 → 矫正后像素）；
+ * - `depth`：输出，**宽相机**坐标系（米），跨度像素；
+ * - `depth_rect_scratch`：必填，width*height 个 float 的临时缓冲（矫正坐标系的深度）。
+ *   由调用方持有：实时路径里不应该由库隐式分配。
+ *
+ * 无状态、线程安全（只要 scratch 不共享）。
+ */
+stereo_status stereo_process_disparity(const float *disp, int disp_stride_px, int width,
+                                       int height, float fB, float min_z, float max_z,
+                                       const float m_up[9], float *depth, int depth_stride_px,
+                                       float *depth_rect_scratch);
+
+/**
  * 第 2..5 步：矫正 → 匹配 → 深度 → 回转 → 连通域分析。
  *
  * 内部就是按顺序调用 stereo_rectify_geometry / stereo_rectify_image ×2 /
@@ -78,10 +98,10 @@ typedef struct stereo_frame_timings {
  * `out->blobs` 与 `out->labels` **都不给**时跳过第 5 步（连通域分析），
  * `out->analysis` 清零 —— 只想拿深度时能省掉降采样+连通域的开销。
  *
- * 成功返回 0。
+ * 失败时看 stereo_last_error()。
  */
-int stereo_process_frame(stereo_context *ctx, const stereo_frame_input *in,
-                         stereo_frame_output *out, stereo_frame_timings *timings);
+stereo_status stereo_process_frame(stereo_context *ctx, const stereo_frame_input *in,
+                                   stereo_frame_output *out, stereo_frame_timings *timings);
 
 #ifdef __cplusplus
 } /* extern "C" */

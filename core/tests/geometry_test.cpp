@@ -421,7 +421,7 @@ int main() {
         ci_src.data = src.data();
         ci_src.width = W;
         ci_src.height = H;
-        ci_src.stride = W * 4;
+        ci_src.stride_bytes = W * 4;
         ci_src.format = STEREO_FORMAT_BGRA8;
         stereo_image ci_dst = ci_src;
         ci_dst.data = viaC.data();
@@ -475,7 +475,7 @@ int main() {
         // C 接口的 depth 也要和 C++ 一致
         stereo_context* ctx = stereo_create();
         std::vector<float> c(static_cast<size_t>(W) * H, 0);
-        const bool ok = stereo_disparity_to_depth(ctx, disp.data(), W, W, H, 65.0f, 0.12f, 3.0f,
+        const bool ok = stereo_disparity_to_depth(disp.data(), W, W, H, 65.0f, 0.12f, 3.0f,
                                                   c.data(), W) == 0;
         report("stereo_disparity_to_depth 一致",
                ok && std::memcmp(a.data(), c.data(), a.size() * 4) == 0);
